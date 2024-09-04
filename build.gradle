@@ -1,5 +1,6 @@
 plugins {
 	id 'java'
+	id 'com.gradleup.shadow' version '8.3.0'
 }
 
 repositories {
@@ -10,4 +11,10 @@ dependencies {
 	annotationProcessor 'org.openjdk.jmh:jmh-generator-annprocess:1.37'
 	implementation 'org.openjdk.jmh:jmh-core:1.37'
 	implementation 'com.github.javafaker:javafaker:1.0.2'
+}
+
+jar {
+	manifest {
+		attributes('Main-Class': 'org.openjdk.jmh.Main')
+	}
 }

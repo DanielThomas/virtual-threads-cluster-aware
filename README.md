@@ -2,7 +2,7 @@ Experiments exploring the potential benefits of cluster aware scheduling/worker 
 
 ## ClusterAwareBenchmark
 
-Benchmark run on an `m7a.8xlarge`:
+Benchmark run on an AWS EC2 `m7a.8xlarge` instance:
 
 ```
 processor	: 0
@@ -35,9 +35,15 @@ power management:
 ```
 
 ```
+# JMH version: 1.37
+# VM version: JDK 24-loom, OpenJDK 64-Bit Server VM, 24-loom+5-48
+# VM invoker: /usr/lib/jvm/openjdk-24-loom/bin/java
+```
+
+```
 Benchmark                        (taskset)  (threadType)   Mode  Cnt      Score     Error  Units
-ClusterAwareBenchmark.benchmark       true      PLATFORM  thrpt    5  24352.759 ±  34.074  ops/s
-ClusterAwareBenchmark.benchmark       true       VIRTUAL  thrpt    5  21218.521 ±  49.639  ops/s
-ClusterAwareBenchmark.benchmark      false      PLATFORM  thrpt    5  18126.486 ± 598.912  ops/s
-ClusterAwareBenchmark.benchmark      false       VIRTUAL  thrpt    5  17487.415 ± 650.333  ops/s
+ClusterAwareBenchmark.benchmark       true      PLATFORM  thrpt    5  27805.927 ± 649.894  ops/s
+ClusterAwareBenchmark.benchmark       true       VIRTUAL  thrpt    5  28483.762 ± 106.723  ops/s
+ClusterAwareBenchmark.benchmark      false      PLATFORM  thrpt    5  21659.802 ± 482.077  ops/s
+ClusterAwareBenchmark.benchmark      false       VIRTUAL  thrpt    5  21142.017 ± 750.666  ops/s
 ```
