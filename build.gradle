@@ -9,12 +9,25 @@ repositories {
 
 dependencies {
 	annotationProcessor 'org.openjdk.jmh:jmh-generator-annprocess:1.37'
+	implementation 'net.openhft:affinity:3.23.3'
 	implementation 'org.openjdk.jmh:jmh-core:1.37'
 	implementation 'com.github.javafaker:javafaker:1.0.2'
+    testImplementation 'org.junit.jupiter:junit-jupiter-api:5.11.0'
+    testRuntimeOnly 'org.junit.jupiter:junit-jupiter-engine:5.11.0'
+}
+
+java {
+	toolchain {
+		languageVersion = JavaLanguageVersion.of(24)
+	}
 }
 
 jar {
 	manifest {
 		attributes('Main-Class': 'org.openjdk.jmh.Main')
 	}
+}
+
+test {
+    useJUnitPlatform()
 }

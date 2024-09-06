@@ -1,8 +1,19 @@
-Experiments exploring the potential benefits of cluster aware scheduling/worker affinity for virtual threads.
-
-## ClusterAwareBenchmark
+Experiments exploring the potential benefits of cluster aware scheduling/worker affinity for virtual threads. Developed against `24-loom+7-60`.
 
 Benchmark run on an AWS EC2 `m7a.8xlarge` instance:
+
+```
+# JMH version: 1.37
+# VM version: JDK 24-loom, OpenJDK 64-Bit Server VM, 24-loom+7-60
+# VM invoker: /usr/lib/jvm/openjdk-24-loom/bin/java
+# VM options: -Dfile.encoding=UTF-8 -Duser.country=US -Duser.language=en -Duser.variant
+```
+
+```
+Benchmark                                 (scheduler)   Mode  Cnt    Score   Error  Units
+ClusterAwareSchedulerBenchmark.benchmark    CLUSTERED  thrpt    5  296.082 ± 1.406  ops/s
+ClusterAwareSchedulerBenchmark.benchmark      DEFAULT  thrpt    5  246.740 ± 0.663  ops/s
+```
 
 ```
 processor	: 0
@@ -32,18 +43,4 @@ clflush size	: 64
 cache_alignment	: 64
 address sizes	: 48 bits physical, 48 bits virtual
 power management:
-```
-
-```
-# JMH version: 1.37
-# VM version: JDK 24-loom, OpenJDK 64-Bit Server VM, 24-loom+5-48
-# VM invoker: /usr/lib/jvm/openjdk-24-loom/bin/java
-```
-
-```
-Benchmark                        (taskset)  (threadType)   Mode  Cnt      Score     Error  Units
-ClusterAwareBenchmark.benchmark       true      PLATFORM  thrpt    5  27805.927 ± 649.894  ops/s
-ClusterAwareBenchmark.benchmark       true       VIRTUAL  thrpt    5  28483.762 ± 106.723  ops/s
-ClusterAwareBenchmark.benchmark      false      PLATFORM  thrpt    5  21659.802 ± 482.077  ops/s
-ClusterAwareBenchmark.benchmark      false       VIRTUAL  thrpt    5  21142.017 ± 750.666  ops/s
 ```
