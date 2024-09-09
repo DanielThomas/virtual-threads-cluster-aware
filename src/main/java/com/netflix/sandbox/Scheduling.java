@@ -82,8 +82,7 @@ public final class Scheduling {
 
     private static final StructLayout CAPTURE_STATE_LAYOUT;
     private static final VarHandle CAPTURE_STATE;
-
-
+gd
     private static final MethodHandle SCHED_GETCPU;
     private static final MethodHandle GETTID;
     private static final MethodHandle SCHED_GETAFFINITY;
