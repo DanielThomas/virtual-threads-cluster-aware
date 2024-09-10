@@ -1,16 +1,62 @@
 package com.netflix.sandbox;
 
+import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.lang.foreign.*;
 import java.lang.invoke.MethodHandle;
 import java.lang.invoke.VarHandle;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.Arrays;
 import java.util.BitSet;
+import java.util.Objects;
+import java.util.stream.IntStream;
+import java.util.stream.Stream;
 
-public final class Scheduling {
+public final class LinuxScheduling {
 
-    private Scheduling() {
+    private LinuxScheduling() {
     }
 
+    public static IntStream sharedCpus(int cpu) {
+        Path path = Path.of("/sys/devices/system/cpu/cpu" + cpu + "/cache");
+        try (Stream<Path> dirs = Files.list(path).filter(Files::isDirectory)) {
+            int highestIndex = dirs.filter(dir -> dir.getFileName().toString().startsWith("index"))
+                .mapToInt(dir -> {
+                    String filename = dir.getFileName().toString();
+                    return Integer.parseInt(filename.substring(5));
+                }).max()
+                .getAsInt();
+            String sharedCpus = Files.readString(path.resolve("index" + highestIndex, "shared_cpu_list")).trim();
+            return parseCpuList(sharedCpus);
+        } catch (IOException e) {
+            throw new UncheckedIOException(e);
+        }
+    }
+
+    public static IntStream onlineCpus() {
+        Path path = Path.of("/sys/devices/system/cpu/online");
+        String onlineCpus = null;
+        try {
+            onlineCpus = Files.readString(path).trim();
+        } catch (IOException e) {
+            throw new UncheckedIOException(e);
+        }
+        return parseCpuList(onlineCpus);
+    }
+
+    private static IntStream parseCpuList(String cpuList) {
+        return Arrays.stream(cpuList.split(","))
+            .flatMapToInt(s -> {
+                String[] split = s.split("-");
+                int start = Integer.parseInt(split[0]);
+                if (split.length == 2) {
+                    return IntStream.rangeClosed(start, Integer.parseInt(split[1]));
+                }
+                return IntStream.of(start);
+            });
+    }
+    
     public static int currentCpu() {
         try (Arena arena = Arena.ofConfined()) {
             MemorySegment capturedState = arena.allocate(CAPTURE_STATE_LAYOUT);
@@ -51,10 +97,11 @@ public final class Scheduling {
         }
     }
 
-    public static void currentThreadAffinity(BitSet mask) {
+    public static void currentThreadAffinity(BitSet cpus) {
         try (Arena arena = Arena.ofConfined()) {
             MemorySegment capturedState = arena.allocate(CAPTURE_STATE_LAYOUT);
-            long[] longs = Arrays.copyOf(mask.toLongArray(), CPUSET_SIZE);
+            long[] longs = cpus.toLongArray();
+            Objects.checkIndex(longs.length, CPUSET_SIZE);
             MemorySegment cpu_set = arena.allocateFrom(ValueLayout.JAVA_LONG, longs);
             try {
                 int result = (int) SCHED_SETAFFINITY.invokeExact(capturedState, nativeThreadId(), cpu_set.byteSize(), cpu_set);
@@ -82,7 +129,7 @@ public final class Scheduling {
 
     private static final StructLayout CAPTURE_STATE_LAYOUT;
     private static final VarHandle CAPTURE_STATE;
-gd
+
     private static final MethodHandle SCHED_GETCPU;
     private static final MethodHandle GETTID;
     private static final MethodHandle SCHED_GETAFFINITY;

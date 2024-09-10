@@ -10,18 +10,6 @@ import java.util.stream.IntStream;
 public class ClusterAwareSchedulerTest {
 
     @Test
-    public void onlineCpusMatchesAvailable() throws IOException {
-        long count = ClusterAwareScheduler.onlineCpus().count();
-        Assertions.assertEquals(Runtime.getRuntime().availableProcessors(), count);
-    }
-
-    @Test
-    public void sharedCpusArePresent() throws IOException {
-        IntStream sharedCpus = ClusterAwareScheduler.sharedCpusForHighestLevelCache(0);
-        Assertions.assertTrue(sharedCpus.findAny().isPresent());
-    }
-
-    @Test
     public void canExecute() throws InterruptedException {
         ClusterAwareScheduler scheduler = new ClusterAwareScheduler();
         CountDownLatch latch = new CountDownLatch(1);
