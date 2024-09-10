@@ -36,7 +36,7 @@ public final class LinuxScheduling {
 
     public static IntStream onlineCpus() {
         Path path = Path.of("/sys/devices/system/cpu/online");
-        String onlineCpus = null;
+        String onlineCpus;
         try {
             onlineCpus = Files.readString(path).trim();
         } catch (IOException e) {
