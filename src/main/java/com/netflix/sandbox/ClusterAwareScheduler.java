@@ -15,9 +15,10 @@ import java.util.stream.IntStream;
  * </ul>
  */
 public class ClusterAwareScheduler implements Executor {
-
     private final List<BitSet> clusters;
-    private final ForkJoinPool[] pools;
+    private final ForkJoinPool[] poolsByCluster;
+    private final ForkJoinPool[] poolsByCpu;
+    private final int queueBalancingThreshold;
 
     /**
      * Creates a {@link ClusterAwareScheduler} with parallelism and clusters
@@ -25,10 +26,10 @@ public class ClusterAwareScheduler implements Executor {
      * shared between those CPUs.
      */
     public ClusterAwareScheduler() {
-        this(onlineClusters());
+        this(sharedCpuClusters());
     }
 
-    private static List<BitSet> onlineClusters() {
+    private static List<BitSet> sharedCpuClusters() {
         return LinuxScheduling.onlineCpus()
             .mapToObj(LinuxScheduling::sharedCpus).map(cpus -> {
                 BitSet bs = new BitSet();
@@ -47,16 +48,28 @@ public class ClusterAwareScheduler implements Executor {
         if (clusters.isEmpty()) {
             throw new IllegalArgumentException("At least one cluster must be provided");
         }
-        pools = IntStream.range(0, clusters.size())
-            .mapToObj(i -> createClusteredForkJoinPool(i, clusters.get(i)))
-            .toArray(ForkJoinPool[]::new);
+        // TODO check clusters do not overlap
+        // TODO check cluster does not have zero cpus
+        queueBalancingThreshold = clusters.stream().mapToInt(BitSet::cardinality)
+            .distinct()
+            .reduce((a, b) -> {
+                throw new IllegalStateException("Clusters have uneven numbers of cpus: " + a + ", " + b);
+            }).getAsInt();
+        int numCpus = clusters.stream().mapToInt(BitSet::length).max().getAsInt();
+        poolsByCpu = new ForkJoinPool[numCpus];
+        poolsByCluster = new ForkJoinPool[clusters.size()];
+        IntStream.range(0, clusters.size()).forEach(i -> {
+            BitSet cluster = clusters.get(i);
+            poolsByCluster[i] = createClusteredForkJoinPool(i, cluster);
+            cluster.stream().forEach(ci -> poolsByCpu[ci] = poolsByCluster[i]);
+        });
     }
 
     /**
      * Return the {@link ForkJoinPool}s.
      */
     public List<ForkJoinPool> getPools() {
-        return List.of(pools);
+        return List.of(poolsByCluster);
     }
 
     /**
@@ -74,12 +87,26 @@ public class ClusterAwareScheduler implements Executor {
         ForkJoinPool pool;
         Thread ct = Thread.currentThread();
         if (ct instanceof ClusteredForkJoinWorkerThread t) {
-            pool = pools[t.clusterIndex];
+            pool = poolsByCluster[t.clusterIndex];
         } else {
-            // so far for this exercise we're only concerned with the benefits of clustering
-            // for throughput stress tests so we just round robin from the submission thread
-            int i = SUBMISSION_COUNT.get().incrementAndGet() % pools.length;
-            pool = pools[i];
+            int cpu = LinuxScheduling.currentCpu();
+            pool = poolsByCpu[cpu];
+        }
+        int queuedSubmissionCount = pool.getQueuedSubmissionCount();
+        if (queuedSubmissionCount > queueBalancingThreshold) {
+            // least loaded
+            for (ForkJoinPool candidate : poolsByCluster) {
+                if (pool == candidate) continue;
+                int candidateQueuedSubmissionCount = candidate.getQueuedSubmissionCount();
+                if (candidateQueuedSubmissionCount == 0) {
+                    pool = candidate;
+                    break;
+                }
+                if (candidateQueuedSubmissionCount < queuedSubmissionCount) {
+                    pool = candidate;
+                    queuedSubmissionCount = candidateQueuedSubmissionCount;
+                }
+            }
         }
         pool.execute(command);
     }

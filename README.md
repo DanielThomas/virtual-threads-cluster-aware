@@ -10,9 +10,9 @@ Benchmark run on an AWS EC2 `m7a.8xlarge` instance:
 ```
 
 ```
-Benchmark                                 (scheduler)   Mode  Cnt    Score   Error  Units
-ClusterAwareSchedulerBenchmark.benchmark    CLUSTERED  thrpt    5  296.082 ± 1.406  ops/s
-ClusterAwareSchedulerBenchmark.benchmark      DEFAULT  thrpt    5  246.740 ± 0.663  ops/s
+Benchmark                                 (scheduler)   Mode  Cnt      Score     Error  Units  Utilization
+ClusterAwareSchedulerBenchmark.benchmark    CLUSTERED  thrpt    5  12344.734 ± 184.742  ops/s  ~1350% CPU
+ClusterAwareSchedulerBenchmark.benchmark      DEFAULT  thrpt    5  11696.960 ± 434.150  ops/s  ~1900% CPU
 ```
 
 ```
