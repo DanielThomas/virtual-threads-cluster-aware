@@ -43,7 +43,7 @@ public class ClusterAwareScheduler implements Executor {
      * Creates a {@link ClusterAwareScheduler} with parallelism and clusters
      * determined by the provided {@link BitSet}s.
      */
-    public ClusterAwareScheduler(List<BitSet> clusters) {
+    protected ClusterAwareScheduler(List<BitSet> clusters) {
         this.clusters = Objects.requireNonNull(clusters);
         if (clusters.isEmpty()) {
             throw new IllegalArgumentException("At least one cluster must be provided");
