@@ -12,33 +12,34 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 public class LinuxSchedulingTest {
 
     @Test
-    public void onlineCpusMatchesAvailable() {
-        long count = LinuxScheduling.onlineCpus().count();
+    public void availableProcessorsMatches() {
+        long count = LinuxScheduling.availableProcessors().count();
         assertEquals(Runtime.getRuntime().availableProcessors(), count);
     }
 
     @Test
     public void sharedCpusArePresent() {
-        IntStream sharedCpus = LinuxScheduling.sharedCpus(0);
+        IntStream sharedCpus = LinuxScheduling.sharedProcessors(0);
         assertTrue(sharedCpus.findAny().isPresent());
     }
     
     @Test
-    public void currentCpu() {
-        int cpu = LinuxScheduling.currentCpu();
+    public void currentProcessorValid() {
+        int cpu = LinuxScheduling.currentProcessor();
 
         assertTrue(cpu >= 0);
+        assertTrue(cpu < Runtime.getRuntime().availableProcessors());
     }
 
     @Test
-    public void nativeThreadId() {
+    public void nativeThreadIdValid() {
         int nid = LinuxScheduling.nativeThreadId();
 
         assertTrue(nid > 0);
     }
 
     @Test
-    public void currentThreadAffinity() {
+    public void currentThreadAffinityValid() {
         BitSet mask = LinuxScheduling.currentThreadAffinity();
 
         assertEquals(Runtime.getRuntime().availableProcessors(), mask.cardinality());
@@ -54,7 +55,7 @@ public class LinuxSchedulingTest {
             BitSet actual = LinuxScheduling.currentThreadAffinity();
     
             assertEquals(cpus, actual);
-            assertEquals(cpu, LinuxScheduling.currentCpu());
+            assertEquals(cpu, LinuxScheduling.currentProcessor());
             assertEquals(1, Runtime.getRuntime().availableProcessors());
         });
         LinuxScheduling.currentThreadAffinity(current);
@@ -76,5 +77,5 @@ public class LinuxSchedulingTest {
         IndexOutOfBoundsException e = Assertions.assertThrows(IndexOutOfBoundsException.class, () -> LinuxScheduling.currentThreadAffinity(invalidMask));
         assertEquals("Index 17 out of bounds for length 16", e.getMessage());
     }
-    
+
 }

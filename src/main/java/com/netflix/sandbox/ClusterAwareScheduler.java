@@ -30,8 +30,8 @@ public class ClusterAwareScheduler implements Executor {
     }
 
     private static List<BitSet> sharedCpuClusters() {
-        return LinuxScheduling.onlineCpus()
-            .mapToObj(LinuxScheduling::sharedCpus).map(cpus -> {
+        return LinuxScheduling.availableProcessors()
+            .mapToObj(LinuxScheduling::sharedProcessors).map(cpus -> {
                 BitSet bs = new BitSet();
                 cpus.forEach(bs::set);
                 return bs;
@@ -89,7 +89,7 @@ public class ClusterAwareScheduler implements Executor {
         if (ct instanceof ClusteredForkJoinWorkerThread t) {
             pool = poolsByCluster[t.clusterIndex];
         } else {
-            int cpu = LinuxScheduling.currentCpu();
+            int cpu = LinuxScheduling.currentProcessor();
             pool = poolsByCpu[cpu];
         }
         int queuedSubmissionCount = pool.getQueuedSubmissionCount();

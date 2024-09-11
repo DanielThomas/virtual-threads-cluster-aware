@@ -17,7 +17,7 @@ public class LinuxSchedulingBenchmark {
     @OutputTimeUnit(TimeUnit.NANOSECONDS)
     @Benchmark
     public int currentCpu() {
-        return LinuxScheduling.currentCpu();
+        return LinuxScheduling.currentProcessor();
     }
 
     @BenchmarkMode(Mode.AverageTime)

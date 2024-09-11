@@ -18,8 +18,37 @@ public final class LinuxScheduling {
     private LinuxScheduling() {
     }
 
-    public static IntStream sharedCpus(int cpu) {
-        Path path = Path.of("/sys/devices/system/cpu/cpu" + cpu + "/cache");
+    /**
+     * Return the processors available to the current thread.
+     * <p>
+     * The {@link IntStream#count()} of the result will equal {@link Runtime#availableProcessors()}.
+     */
+    public static IntStream availableProcessors() {
+        return currentThreadAffinity().stream();
+    }
+
+    /**
+     * Return the processor that the current thread is running on.
+     */
+    public static int currentProcessor() {
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment capturedState = arena.allocate(CAPTURE_STATE_LAYOUT);
+            int result = (int) SCHED_GETCPU.invokeExact(capturedState);
+            if (result == -1) {
+                int errno = (int) CAPTURE_STATE.get(capturedState, 0L);
+                throw new RuntimeException("sched_getcpu failed with errno: " + errno);
+            }
+            return result;
+        } catch (Throwable e) {
+            throw wrapChecked(e);
+        }
+    }
+
+    /**
+     * Return the processors that share a cache with the given processor.
+     */
+    public static IntStream sharedProcessors(int index) {
+        Path path = Path.of("/sys/devices/system/cpu/cpu" + index + "/cache");
         try (Stream<Path> dirs = Files.list(path).filter(Files::isDirectory)) {
             int highestIndex = dirs.filter(dir -> dir.getFileName().toString().startsWith("index"))
                 .mapToInt(dir -> {
@@ -34,43 +63,9 @@ public final class LinuxScheduling {
         }
     }
 
-    public static IntStream onlineCpus() {
-        Path path = Path.of("/sys/devices/system/cpu/online");
-        String onlineCpus;
-        try {
-            onlineCpus = Files.readString(path).trim();
-        } catch (IOException e) {
-            throw new UncheckedIOException(e);
-        }
-        return parseCpuList(onlineCpus);
-    }
-
-    private static IntStream parseCpuList(String cpuList) {
-        return Arrays.stream(cpuList.split(","))
-            .flatMapToInt(s -> {
-                String[] split = s.split("-");
-                int start = Integer.parseInt(split[0]);
-                if (split.length == 2) {
-                    return IntStream.rangeClosed(start, Integer.parseInt(split[1]));
-                }
-                return IntStream.of(start);
-            });
-    }
-    
-    public static int currentCpu() {
-        try (Arena arena = Arena.ofConfined()) {
-            MemorySegment capturedState = arena.allocate(CAPTURE_STATE_LAYOUT);
-            int result = (int) SCHED_GETCPU.invokeExact(capturedState);
-            if (result == -1) {
-                int errno = (int) CAPTURE_STATE.get(capturedState, 0L);
-                throw new RuntimeException("sched_getcpu failed with errno: " + errno);
-            }
-            return result;
-        } catch (Throwable e) {
-            throw wrapChecked(e);
-        }
-    }
-
+    /**
+     * Return the native thread identifier for the current thread.
+     */
     public static int nativeThreadId() {
         try {
             return (int) GETTID.invokeExact();
@@ -79,6 +74,9 @@ public final class LinuxScheduling {
         }        
     }
 
+    /**
+     * Return a {@link BitSet} describing the processor affinity for the current thread.
+     */
     public static BitSet currentThreadAffinity() {
         try (Arena arena = Arena.ofConfined()) {
             MemorySegment capturedState = arena.allocate(CAPTURE_STATE_LAYOUT);
@@ -97,6 +95,9 @@ public final class LinuxScheduling {
         }
     }
 
+    /**
+     * Set the processor affinity for the current thread.
+     */
     public static void currentThreadAffinity(BitSet cpus) {
         try (Arena arena = Arena.ofConfined()) {
             MemorySegment capturedState = arena.allocate(CAPTURE_STATE_LAYOUT);
@@ -114,7 +115,19 @@ public final class LinuxScheduling {
             }
         }
     }
-    
+
+    private static IntStream parseCpuList(String cpuList) {
+        return Arrays.stream(cpuList.split(","))
+            .flatMapToInt(s -> {
+                String[] split = s.split("-");
+                int start = Integer.parseInt(split[0]);
+                if (split.length == 2) {
+                    return IntStream.rangeClosed(start, Integer.parseInt(split[1]));
+                }
+                return IntStream.of(start);
+            });
+    }
+
     private static RuntimeException wrapChecked(Throwable t) {
         switch(t) {
             case Error e -> throw e;
