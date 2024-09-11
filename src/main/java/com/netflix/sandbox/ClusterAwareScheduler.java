@@ -79,9 +79,6 @@ public class ClusterAwareScheduler implements Executor {
         return List.copyOf(clusters);
     }
 
-    private static final ThreadLocal<AtomicInteger> SUBMISSION_COUNT =
-        ThreadLocal.withInitial(AtomicInteger::new);
-
     @Override
     public void execute(Runnable command) {
         ForkJoinPool pool;
