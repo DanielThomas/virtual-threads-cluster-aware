@@ -3,24 +3,22 @@ package com.netflix.sandbox;
 import com.github.javafaker.Address;
 import com.github.javafaker.Faker;
 import org.openjdk.jmh.annotations.*;
-import org.openjdk.jmh.profile.LinuxPerfProfiler;
 import org.openjdk.jmh.runner.Runner;
 import org.openjdk.jmh.runner.RunnerException;
 import org.openjdk.jmh.runner.options.Options;
 import org.openjdk.jmh.runner.options.OptionsBuilder;
 
-import java.io.IOException;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.stream.IntStream;
 
-public class ClusterAwareSchedulerBenchmark {
+public class VirtualThreadsSchedulerComparisonBenchmark {
 
     @State(Scope.Benchmark)
     public static class ExecutorState {
         @Param({"CLUSTERED", "DEFAULT"})
         public Scheduler scheduler;
-        
+
         public ExecutorService executor;
         
         public int numTasks = Runtime.getRuntime().availableProcessors();
@@ -32,7 +30,7 @@ public class ClusterAwareSchedulerBenchmark {
             executor = switch(scheduler) {
                 case DEFAULT ->  Executors.newVirtualThreadPerTaskExecutor();
                 case CLUSTERED -> {
-                    System.setProperty("jdk.virtualThreadScheduler.implClass", ClusterAwareScheduler.class.getCanonicalName());
+                    System.setProperty("jdk.virtualThreadScheduler.implClass", ProcessorClusteredExecutorService.class.getCanonicalName());
                     yield Executors.newVirtualThreadPerTaskExecutor();
                 }
             };
@@ -60,7 +58,7 @@ public class ClusterAwareSchedulerBenchmark {
 
     public static void main(String[] args) throws RunnerException {
         Options opt = new OptionsBuilder()
-            .include(ClusterAwareSchedulerBenchmark.class.getSimpleName())
+            .include(VirtualThreadsSchedulerComparisonBenchmark.class.getSimpleName())
             .warmupIterations(5)
             .measurementIterations(5)
             .forks(1)
