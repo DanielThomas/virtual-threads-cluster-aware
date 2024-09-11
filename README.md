@@ -10,9 +10,7 @@ Benchmark run on an AWS EC2 `m7a.8xlarge` instance:
 ```
 
 ```
-Benchmark                                             (scheduler)   Mode  Cnt      Score     Error  Units  CPU Utilization
-VirtualThreadsSchedulerComparisonBenchmark.benchmark    CLUSTERED  thrpt    5  12024.401 ± 287.280  ops/s  ~1500%
-VirtualThreadsSchedulerComparisonBenchmark.benchmark      DEFAULT  thrpt    5  10498.103 ± 495.051  ops/s  ~1800%
+... TODO ...
 ```
 
 ```

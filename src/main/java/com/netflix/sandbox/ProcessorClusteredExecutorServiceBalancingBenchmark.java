@@ -1,6 +1,5 @@
 package com.netflix.sandbox;
 
-import com.netflix.sandbox.ProcessorClusteredExecutorService.BalancingStrategy;
 import org.openjdk.jmh.annotations.*;
 import org.openjdk.jmh.infra.Blackhole;
 import org.openjdk.jmh.runner.Runner;
@@ -16,14 +15,12 @@ public class ProcessorClusteredExecutorServiceBalancingBenchmark {
 
     @State(Scope.Benchmark)
     public static class BalancingBenchmarkState {
-        @Param({"NONE", "LEAST_LOADED", "BIASED_CHOOSE_TWO"})
-        public BalancingStrategy balancingStrategy;
         public ExecutorService executor;
         public List<Callable<String>> tasks;
 
         @Setup(Level.Trial)
         public void setupExecutor() {
-            executor = new ProcessorClusteredExecutorService(balancingStrategy);
+            executor = new ProcessorClusteredExecutorService();
             long tokens = 1_000_000;
             tasks = IntStream.range(0, Runtime.getRuntime().availableProcessors() * 1000)
                 .mapToObj(i -> (Callable<String>) () -> {

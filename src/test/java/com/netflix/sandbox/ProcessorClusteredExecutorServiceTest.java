@@ -1,6 +1,5 @@
 package com.netflix.sandbox;
 
-import com.netflix.sandbox.ProcessorClusteredExecutorService.BalancingStrategy;
 import com.netflix.sandbox.ProcessorClusteredExecutorServiceBalancingBenchmark.BalancingBenchmarkState;
 import org.junit.jupiter.api.Test;
 
@@ -40,20 +39,18 @@ public class ProcessorClusteredExecutorServiceTest {
     }
 
     @Test
-    public void leastLoadedExternalBenchmark() throws InterruptedException {
+    public void externalBenchmark() throws InterruptedException {
         ProcessorClusteredExecutorServiceBalancingBenchmark benchmark = new ProcessorClusteredExecutorServiceBalancingBenchmark();
         BalancingBenchmarkState state = new BalancingBenchmarkState();
-        state.balancingStrategy = BalancingStrategy.LEAST_LOADED;
         state.setupExecutor();
         benchmark.external(state);
         System.out.println(state.executor.toString());
     }
 
     @Test
-    public void leastLoadedInternalBenchmark() throws ExecutionException, InterruptedException {
+    public void internalBenchmark() throws ExecutionException, InterruptedException {
         ProcessorClusteredExecutorServiceBalancingBenchmark benchmark = new ProcessorClusteredExecutorServiceBalancingBenchmark();
         BalancingBenchmarkState state = new BalancingBenchmarkState();
-        state.balancingStrategy = BalancingStrategy.LEAST_LOADED;
         state.setupExecutor();
         benchmark.internal(state);
         System.out.println(state.executor.toString());

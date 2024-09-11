@@ -9,39 +9,17 @@ import java.util.stream.IntStream;
  * An {@link ExecutorService} that attempts to place tasks to the nearest processor cluster.
  */
 public class ProcessorClusteredExecutorService extends AbstractExecutorService {
-    private final List<BitSet> clusters;
-    private final ForkJoinPool[] poolsByCluster;
-    private final ForkJoinPool[] poolsByCpu;
-    private final BalancingStrategy balancingStrategy;
+    private final ForkJoinPool[] pools;
+    private final int[][] candidatePools;
+    private final int[] clustersByCpu;
 
     /**
      * Creates a {@link ProcessorClusteredExecutorService} with parallelism and clusters
-     * automatically using the currently available processors and the highest level cache
-     * shared between those CPUs.
-     * <p>
-     * The {@link BalancingStrategy#LEAST_LOADED} strategy is used unless it is
-     * configured using the {@code netflix.ClusterAwareScheduler.balancingStrategy}
-     * system property.
-     */
-    public ProcessorClusteredExecutorService() {
-        this(defaultBalancingStrategy());
-    }
-
-    /**
-     * Creates a {@link ProcessorClusteredExecutorService} with parallelism and clusters
-     * automatically using the currently available processors and the highest level cache
+     * automatically determined the currently available processors and the highest level cache
      * shared between those processors.
      */
-    public ProcessorClusteredExecutorService(BalancingStrategy balancingStrategy) {
-        this(sharedProcessors(), balancingStrategy);
-    }
-
-    private static BalancingStrategy defaultBalancingStrategy() {
-        String name = System.getProperty("netflix.ClusterAwareScheduler.balancingStrategy");
-        if (name != null) {
-            BalancingStrategy.valueOf(name);
-        }
-        return BalancingStrategy.LEAST_LOADED;
+    public ProcessorClusteredExecutorService() {
+        this(sharedProcessors());
     }
 
     protected static List<BitSet> sharedProcessors() {
@@ -58,22 +36,21 @@ public class ProcessorClusteredExecutorService extends AbstractExecutorService {
      * Creates a {@link ProcessorClusteredExecutorService} with parallelism and clusters
      * determined by the provided {@link BitSet}s.
      */
-    protected ProcessorClusteredExecutorService(List<BitSet> clusters, BalancingStrategy balancingStrategy) {
-        this.clusters = Objects.requireNonNull(clusters);
-        this.balancingStrategy = Objects.requireNonNull(balancingStrategy);
-        if (clusters.isEmpty()) {
-            throw new IllegalArgumentException("At least one cluster must be provided");
-        }
-        // TODO check clusters do not overlap
-        // TODO check cluster does not have zero cpus
-        // TODO check clusters are balanced
-        int numCpus = clusters.stream().mapToInt(BitSet::length).max().getAsInt();
-        poolsByCpu = new ForkJoinPool[numCpus];
-        poolsByCluster = new ForkJoinPool[clusters.size()];
+    protected ProcessorClusteredExecutorService(SequencedCollection<BitSet> clusters) {
+        Objects.requireNonNull(clusters);
+        int highestCpu = clusters.stream().mapToInt(BitSet::size).max().getAsInt();
+        // TODO check that clusters don't overlap
+        // TODO check that clusters have equal sizes
+        int numPools = clusters.size();
+        pools = new ForkJoinPool[numPools];
+        candidatePools = new int[numPools][];
+        clustersByCpu = new int[highestCpu];
+        Iterator<BitSet> it = clusters.iterator();
         IntStream.range(0, clusters.size()).forEach(i -> {
-            BitSet cluster = clusters.get(i);
-            poolsByCluster[i] = createClusteredForkJoinPool(i, cluster);
-            cluster.stream().forEach(ci -> poolsByCpu[ci] = poolsByCluster[i]);
+            BitSet processors = it.next();
+            processors.stream().forEach(cpu -> clustersByCpu[cpu] = i);
+            pools[i] = createForkJoinPool(i, processors);
+            candidatePools[i] = IntStream.range(0, numPools).filter(j -> j == i).toArray();
         });
     }
 
@@ -81,45 +58,33 @@ public class ProcessorClusteredExecutorService extends AbstractExecutorService {
      * Return the {@link ForkJoinPool}s.
      */
     List<ForkJoinPool> getPools() {
-        return List.of(poolsByCluster);
-    }
-
-    /**
-     * Return the clusters.
-     */
-    List<BitSet> getClusters() {
-        return List.copyOf(clusters);
+        return List.of(pools);
     }
 
     @Override
     public void execute(Runnable command) {
         ForkJoinPool pool;
         Thread ct = Thread.currentThread();
+        int clusterIndex;
         if (ct instanceof ClusteredForkJoinWorkerThread t) {
-            pool = poolsByCluster[t.clusterIndex];
+            clusterIndex = t.clusterIndex;
+            pool = pools[clusterIndex];
             if (t.getQueuedTaskCount() == 0) {
                 pool.submit(command);
                 return;
             }
         } else {
-            int cpu = LinuxScheduling.currentProcessor();
-            pool = poolsByCpu[cpu];
+            clusterIndex = clustersByCpu[LinuxScheduling.currentProcessor()];
+            pool = pools[clusterIndex];
         }
-        if (balancingStrategy == BalancingStrategy.LEAST_LOADED) {
-            int queuedSubmissionCount = pool.getQueuedSubmissionCount();
-            if (queuedSubmissionCount > 0) {
-                for (ForkJoinPool candidate : poolsByCluster) {
-                    if (pool == candidate) continue;
-                    int candidateQueuedSubmissionCount = candidate.getQueuedSubmissionCount();
-                    if (candidateQueuedSubmissionCount == 0) {
-                        pool = candidate;
-                        break;
-                    }
-                    if (candidateQueuedSubmissionCount < queuedSubmissionCount) {
-                        pool = candidate;
-                        queuedSubmissionCount = candidateQueuedSubmissionCount;
-                    }
-                }
+        int queuedSumissions = pool.getQueuedSubmissionCount();
+        if (queuedSumissions > 0) {
+            // least loaded choice of two, with one being the current cluster
+            int[] candidates = candidatePools[clusterIndex];
+            int otherClusterIndex = candidates[ThreadLocalRandom.current().nextInt(candidates.length)];
+            ForkJoinPool otherPool = pools[otherClusterIndex];
+            if (queuedSumissions > otherPool.getQueuedSubmissionCount()) {
+                pool = otherPool;
             }
         }
         pool.externalSubmit(ForkJoinTask.adapt(command));
@@ -127,42 +92,47 @@ public class ProcessorClusteredExecutorService extends AbstractExecutorService {
 
     @Override
     public void shutdown() {
-
+        Arrays.stream(pools).forEach(ForkJoinPool::shutdown);
     }
 
     @Override
     public List<Runnable> shutdownNow() {
-        return List.of();
+        return Arrays.stream(pools).flatMap(pool -> pool.shutdownNow().stream()).toList();
     }
 
     @Override
     public boolean isShutdown() {
-        return false;
+        return Arrays.stream(pools).allMatch(ForkJoinPool::isShutdown);
     }
 
     @Override
     public boolean isTerminated() {
-        return false;
+        return Arrays.stream(pools).allMatch(ForkJoinPool::isTerminated);
     }
 
     @Override
     public boolean awaitTermination(long timeout, TimeUnit unit) throws InterruptedException {
-        // TODO
+        long current = System.nanoTime();
+        long remaining = unit.toNanos(timeout);
+        for (ForkJoinPool pool : pools) {
+            if (!pool.awaitTermination(remaining, unit)) {
+                return false;
+            }
+            long elapsed = current - System.nanoTime();
+            remaining = remaining - elapsed;
+        }
         return true;
     }
 
     @Override
     public String toString() {
-        return IntStream.range(0, poolsByCluster.length)
-            .mapToObj(i -> i + ": " + poolsByCluster[i])
+        return IntStream.range(0, pools.length)
+            .mapToObj(i -> i + ": " + pools[i])
             .collect(Collectors.joining("\n"));
     }
 
-    private static ForkJoinPool createClusteredForkJoinPool(int clusterIndex, BitSet processors) {
+    private static ForkJoinPool createForkJoinPool(int clusterIndex, BitSet processors) {
         int parallelism = processors.cardinality();
-        if (parallelism == 0) {
-            throw new IllegalArgumentException("At least one cpu must be defined");
-        }
         int minRunnable = Integer.max(parallelism / 2, 1); // TODO copied from VirtualThread.createDefaultForkJoinPoolScheduler, related to compensation IIUC
         ForkJoinPool.ForkJoinWorkerThreadFactory factory = pool -> new ClusteredForkJoinWorkerThread(pool, clusterIndex, processors);
         Thread.UncaughtExceptionHandler handler = (_, _) -> {
@@ -174,24 +144,18 @@ public class ProcessorClusteredExecutorService extends AbstractExecutorService {
 
     private static final class ClusteredForkJoinWorkerThread extends ForkJoinWorkerThread {
         private final int clusterIndex;
-        private final BitSet cpus;
+        private final BitSet processors;
 
-        private ClusteredForkJoinWorkerThread(ForkJoinPool pool, int clusterIndex, BitSet cpus) {
+        private ClusteredForkJoinWorkerThread(ForkJoinPool pool, int clusterIndex, BitSet processors) {
             super(null, pool, true);
             this.clusterIndex = clusterIndex;
-            this.cpus = cpus;
+            this.processors = processors;
         }
 
         @Override
         protected void onStart() {
-            LinuxScheduling.currentThreadAffinity(cpus);
+            LinuxScheduling.currentThreadAffinity(processors);
         }
-    }
-
-    public enum BalancingStrategy {
-        NONE,
-        LEAST_LOADED,
-        BIASED_CHOOSE_TWO
     }
 
 }
