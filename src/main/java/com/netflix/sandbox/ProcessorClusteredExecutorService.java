@@ -11,7 +11,7 @@ import java.util.stream.IntStream;
 public class ProcessorClusteredExecutorService extends AbstractExecutorService {
     private final ForkJoinPool[] pools;
     private final int[][] adjacentClusterIndexes;
-    private final int[] clusterIndexesByCpu;
+    private final int[] clusterIndexesByProcessor;
 
     /**
      * Creates a {@link ProcessorClusteredExecutorService} with parallelism and clusters
@@ -28,15 +28,16 @@ public class ProcessorClusteredExecutorService extends AbstractExecutorService {
             .toList();
 
         Objects.requireNonNull(clusters);
-        int highestCpu = clusters.stream().mapToInt(BitSet::size).max().getAsInt();
+        int highestProcessor = clusters.stream().mapToInt(BitSet::size).max().getAsInt();
         int numPools = clusters.size();
         pools = new ForkJoinPool[numPools];
-        clusterIndexesByCpu = new int[highestCpu];
+        clusterIndexesByProcessor = new int[highestProcessor];
+        Arrays.fill(clusterIndexesByProcessor, -1);
 
         Iterator<BitSet> it = clusters.iterator();
         IntStream.range(0, clusters.size()).forEach(i -> {
             BitSet processors = it.next();
-            processors.stream().forEach(cpu -> clusterIndexesByCpu[cpu] = i);
+            processors.stream().forEach(n -> clusterIndexesByProcessor[n] = i);
             pools[i] = createForkJoinPool(i, processors);
         });
 
@@ -66,7 +67,7 @@ public class ProcessorClusteredExecutorService extends AbstractExecutorService {
         if (ct instanceof ClusteredForkJoinWorkerThread t) {
             clusterIndex = t.clusterIndex;
         } else {
-            clusterIndex = clusterIndexesByCpu[LinuxScheduling.currentProcessor()];
+            clusterIndex = clusterIndexesByProcessor[LinuxScheduling.currentProcessor()];
         }
         ForkJoinPool pool = pools[clusterIndex];
         long queueCount = pool.getQueuedTaskCount() + pool.getQueuedSubmissionCount();
