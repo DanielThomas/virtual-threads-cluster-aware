@@ -14,21 +14,37 @@ public class LinuxSchedulingTest {
     @Test
     public void availableProcessorsMatches() {
         long count = LinuxScheduling.availableProcessors().count();
+
         assertEquals(Runtime.getRuntime().availableProcessors(), count);
     }
 
     @Test
-    public void sharedCpusArePresent() {
+    public void sharedProcessorsArePresent() {
         IntStream sharedCpus = LinuxScheduling.sharedProcessors(0);
+
         assertTrue(sharedCpus.findAny().isPresent());
     }
-    
+
     @Test
     public void currentProcessorValid() {
         int cpu = LinuxScheduling.currentProcessor();
 
         assertTrue(cpu >= 0);
         assertTrue(cpu < Runtime.getRuntime().availableProcessors());
+    }
+
+    @Test
+    public void processorNodesPresent() {
+        IntStream nodes = LinuxScheduling.processorNodes();
+
+        assertEquals(0, nodes.findFirst().getAsInt());
+    }
+
+    @Test
+    public void nodeProcessorsPresent() {
+        IntStream nodeProcessors = LinuxScheduling.nodeProcessors(0);
+
+        assertTrue(nodeProcessors.findAny().isPresent());
     }
 
     @Test
@@ -47,18 +63,18 @@ public class LinuxSchedulingTest {
 
     @Test
     public void setAndSetCurrentTheadAffinity() {
-        BitSet current = LinuxScheduling.currentThreadAffinity();
+        BitSet previous = LinuxScheduling.currentThreadAffinity();
         IntStream.range(0, Runtime.getRuntime().availableProcessors()).forEach(cpu -> {
             BitSet cpus = new BitSet();
             cpus.set(cpu);
             LinuxScheduling.currentThreadAffinity(cpus);
             BitSet actual = LinuxScheduling.currentThreadAffinity();
-    
+
             assertEquals(cpus, actual);
             assertEquals(cpu, LinuxScheduling.currentProcessor());
             assertEquals(1, Runtime.getRuntime().availableProcessors());
         });
-        LinuxScheduling.currentThreadAffinity(current);
+        LinuxScheduling.currentThreadAffinity(previous);
     }
 
     @Test

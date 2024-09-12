@@ -6,12 +6,12 @@ import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
 /**
- * An {@link ExecutorService} that attempts to place tasks to the nearest processor cluster.
+ * An {@link ExecutorService} that attempts to place tasks on the current processor cluster.
  */
 public class ProcessorClusteredExecutorService extends AbstractExecutorService {
     private final ForkJoinPool[] pools;
-    private final int[][] candidatePools;
-    private final int[] clustersByCpu;
+    private final int[][] adjacentClusterIndexes;
+    private final int[] clusterIndexesByCpu;
 
     /**
      * Creates a {@link ProcessorClusteredExecutorService} with parallelism and clusters
@@ -19,39 +19,37 @@ public class ProcessorClusteredExecutorService extends AbstractExecutorService {
      * shared between those processors.
      */
     public ProcessorClusteredExecutorService() {
-        this(sharedProcessors());
-    }
-
-    protected static List<BitSet> sharedProcessors() {
-        return LinuxScheduling.availableProcessors()
+        List<BitSet> clusters = LinuxScheduling.availableProcessors()
             .mapToObj(LinuxScheduling::sharedProcessors).map(cpus -> {
                 BitSet bs = new BitSet();
                 cpus.forEach(bs::set);
                 return bs;
             }).distinct()
             .toList();
-    }
 
-    /**
-     * Creates a {@link ProcessorClusteredExecutorService} with parallelism and clusters
-     * determined by the provided {@link BitSet}s.
-     */
-    protected ProcessorClusteredExecutorService(SequencedCollection<BitSet> clusters) {
         Objects.requireNonNull(clusters);
         int highestCpu = clusters.stream().mapToInt(BitSet::size).max().getAsInt();
-        // TODO check that clusters don't overlap
-        // TODO check that clusters have equal sizes
         int numPools = clusters.size();
         pools = new ForkJoinPool[numPools];
-        candidatePools = new int[numPools][];
-        clustersByCpu = new int[highestCpu];
+        clusterIndexesByCpu = new int[highestCpu];
+
         Iterator<BitSet> it = clusters.iterator();
         IntStream.range(0, clusters.size()).forEach(i -> {
             BitSet processors = it.next();
-            processors.stream().forEach(cpu -> clustersByCpu[cpu] = i);
+            processors.stream().forEach(cpu -> clusterIndexesByCpu[cpu] = i);
             pools[i] = createForkJoinPool(i, processors);
-            candidatePools[i] = IntStream.range(0, numPools).filter(j -> j == i).toArray();
         });
+
+        int[][] clusterNodes = clusters.stream()
+            .map(BitSet::stream)
+            .map(i -> i.flatMap(LinuxScheduling::processorNodes).distinct().toArray())
+            .toArray(int[][]::new);
+        adjacentClusterIndexes = IntStream.range(0, clusterNodes.length).mapToObj(i -> {
+            int[] nodes = clusterNodes[i];
+            return IntStream.range(0, clusterNodes.length)
+                .filter(j -> j != i && Arrays.equals(nodes, clusterNodes[j]))
+                .toArray();
+        }).toArray(int[][]::new);
     }
 
     /**
@@ -63,31 +61,26 @@ public class ProcessorClusteredExecutorService extends AbstractExecutorService {
 
     @Override
     public void execute(Runnable command) {
-        ForkJoinPool pool;
         Thread ct = Thread.currentThread();
         int clusterIndex;
         if (ct instanceof ClusteredForkJoinWorkerThread t) {
             clusterIndex = t.clusterIndex;
-            pool = pools[clusterIndex];
-            if (t.getQueuedTaskCount() == 0) {
-                pool.submit(command);
-                return;
-            }
         } else {
-            clusterIndex = clustersByCpu[LinuxScheduling.currentProcessor()];
-            pool = pools[clusterIndex];
+            clusterIndex = clusterIndexesByCpu[LinuxScheduling.currentProcessor()];
         }
-        int queuedSumissions = pool.getQueuedSubmissionCount();
-        if (queuedSumissions > 0) {
+        ForkJoinPool pool = pools[clusterIndex];
+        long queueCount = pool.getQueuedTaskCount() + pool.getQueuedSubmissionCount();
+        if (queueCount > 0) {
             // least loaded choice of two, with one being the current cluster
-            int[] candidates = candidatePools[clusterIndex];
-            int otherClusterIndex = candidates[ThreadLocalRandom.current().nextInt(candidates.length)];
-            ForkJoinPool otherPool = pools[otherClusterIndex];
-            if (queuedSumissions > otherPool.getQueuedSubmissionCount()) {
-                pool = otherPool;
+            int[] candidates = adjacentClusterIndexes[clusterIndex];
+            int adjacentClusterIndex = candidates[ThreadLocalRandom.current().nextInt(candidates.length)];
+            ForkJoinPool adjacentPool = pools[adjacentClusterIndex];
+            long adjacentQueueCount = adjacentPool.getQueuedTaskCount() + adjacentPool.getQueuedSubmissionCount();
+            if (queueCount > adjacentQueueCount) {
+                pool = adjacentPool;
             }
         }
-        pool.externalSubmit(ForkJoinTask.adapt(command));
+        pool.submit(command);
     }
 
     @Override

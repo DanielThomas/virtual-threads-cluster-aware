@@ -3,6 +3,7 @@ package com.netflix.sandbox;
 import com.github.javafaker.Address;
 import com.github.javafaker.Faker;
 import org.openjdk.jmh.annotations.*;
+import org.openjdk.jmh.profile.LinuxPerfProfiler;
 import org.openjdk.jmh.runner.Runner;
 import org.openjdk.jmh.runner.RunnerException;
 import org.openjdk.jmh.runner.options.Options;
