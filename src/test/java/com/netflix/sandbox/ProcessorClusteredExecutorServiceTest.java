@@ -3,8 +3,10 @@ package com.netflix.sandbox;
 import com.netflix.sandbox.ProcessorClusteredExecutorServiceBalancingBenchmark.BalancingBenchmarkState;
 import org.junit.jupiter.api.Test;
 
+import java.util.List;
 import java.util.concurrent.*;
 
+import static com.netflix.sandbox.VirtualThreadsSchedulerComparisonBenchmark.*;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -54,6 +56,28 @@ public class ProcessorClusteredExecutorServiceTest {
         state.setupExecutor();
         benchmark.internal(state);
         System.out.println(state.executor.toString());
+    }
+
+    @Test
+    public void submitBenchmark() throws InterruptedException, ExecutionException {
+        VirtualThreadsSchedulerComparisonBenchmark benchmark = new VirtualThreadsSchedulerComparisonBenchmark();
+        SchedulerBenchmarkState state = new SchedulerBenchmarkState();
+        state.scheduler = Scheduler.CLUSTERED;
+        state.setupExecutor();
+        String actual = benchmark.submit(state);
+
+        assertTrue(actual.startsWith("Hello"));
+    }
+
+    @Test
+    public void invokeAllBenchmark() throws InterruptedException {
+        VirtualThreadsSchedulerComparisonBenchmark benchmark = new VirtualThreadsSchedulerComparisonBenchmark();
+        SchedulerBenchmarkState state = new SchedulerBenchmarkState();
+        state.scheduler = Scheduler.CLUSTERED;
+        state.setupExecutor();
+        List<String> results = benchmark.invokeAll(state);
+
+        assertEquals(state.numTasks, results.size());
     }
 
 }

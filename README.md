@@ -10,7 +10,9 @@ Benchmark run on an AWS EC2 `m7a.8xlarge` instance:
 ```
 
 ```
-... TODO ...
+Benchmark                                          (scheduler)   Mode  Cnt      Score      Error  Units
+VirtualThreadsSchedulerComparisonBenchmark.submit    CLUSTERED  thrpt    5  40697.195 ±  356.746  ops/s
+VirtualThreadsSchedulerComparisonBenchmark.submit    DEFAULT    thrpt    5  30689.891 ± 9188.606  ops/s
 ```
 
 ```
