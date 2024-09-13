@@ -1,5 +1,7 @@
 Experiments exploring the potential benefits of cluster aware scheduling/worker affinity for virtual threads. Developed against `24-loom+7-60`.
 
+See https://mail.openjdk.org/pipermail/loom-dev/2024-September/007161.html for background.
+
 Benchmark run on an AWS EC2 `m7a.8xlarge` instance:
 
 ```
