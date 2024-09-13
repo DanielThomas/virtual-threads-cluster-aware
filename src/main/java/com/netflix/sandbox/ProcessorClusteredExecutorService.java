@@ -19,8 +19,6 @@ public class ProcessorClusteredExecutorService extends AbstractExecutorService {
     private final int[] clusterIndexesByProcessor;
     private final boolean clusterSubmissions;
 
-    private final AtomicInteger foo = new AtomicInteger();
-
     /**
      * Creates a {@link ProcessorClusteredExecutorService} with parallelism and clusters
      * automatically determined the currently available processors and the highest level cache
@@ -90,7 +88,6 @@ public class ProcessorClusteredExecutorService extends AbstractExecutorService {
 
     @Override
     public void execute(Runnable command) {
-        foo.incrementAndGet();
         Thread t = Thread.currentThread();
         ForkJoinPool preferredPool; int[] candidateIndexes;
         if (t instanceof ClusteredForkJoinWorkerThread ct) {
