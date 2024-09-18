@@ -17,23 +17,25 @@ public class VirtualThreadsSchedulerComparisonBenchmark {
 
     @State(Scope.Benchmark)
     public static class SchedulerBenchmarkState {
-        @Param({"CLUSTERED", "DEFAULT"})
+        @Param({"SINGLE", "SINGLE_WITH_AFFINITY", "CLUSTERED", "DEFAULT"})
         public Scheduler scheduler;
 
-        public ExecutorService executor;
+        public ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
         
         public int numTasks = Runtime.getRuntime().availableProcessors() * 100;
         public List<Callable<Future<String>>> tasks;
 
         @Setup(Level.Trial)
         public void setupExecutor() {
-            executor = switch(scheduler) {
-                case DEFAULT ->  Executors.newVirtualThreadPerTaskExecutor();
-                case CLUSTERED -> {
-                    System.setProperty("jdk.virtualThreadScheduler.implClass", ProcessorClusteredExecutorService.class.getCanonicalName());
-                    yield Executors.newVirtualThreadPerTaskExecutor();
-                }
+            Class<? extends Executor> implClass = switch(scheduler) {
+                case SINGLE -> SingleThreadExecutor.class;
+                case SINGLE_WITH_AFFINITY -> SingleThreadWithAffinityExecutor.class;
+                case CLUSTERED -> ProcessorClusteredExecutorService.class;
+                default -> null;
             };
+            if (implClass != null) {
+                System.setProperty("jdk.virtualThreadScheduler.implClass", implClass.getCanonicalName());
+            }
             Faker faker = new Faker();
             tasks = IntStream.range(0, numTasks).mapToObj(_ -> (Callable<Future<String>>) () -> {
                 Address address = faker.address();
@@ -74,6 +76,8 @@ public class VirtualThreadsSchedulerComparisonBenchmark {
     }
 
     public enum Scheduler {
+        SINGLE,
+        SINGLE_WITH_AFFINITY,
         DEFAULT,
         CLUSTERED
     }
