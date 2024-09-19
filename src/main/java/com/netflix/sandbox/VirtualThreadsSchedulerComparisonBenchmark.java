@@ -17,7 +17,7 @@ public class VirtualThreadsSchedulerComparisonBenchmark {
 
     @State(Scope.Benchmark)
     public static class SchedulerBenchmarkState {
-        @Param({"SINGLE", "SINGLE_WITH_AFFINITY", "CLUSTERED", "DEFAULT"})
+        @Param({"AFFINITY", "DEFAULT"})
         public Scheduler scheduler;
 
         public ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
@@ -30,6 +30,7 @@ public class VirtualThreadsSchedulerComparisonBenchmark {
             Class<? extends Executor> implClass = switch(scheduler) {
                 case SINGLE -> SingleThreadExecutor.class;
                 case SINGLE_WITH_AFFINITY -> SingleThreadWithAffinityExecutor.class;
+                case AFFINITY -> ForkJoinPoolWithAffinityExecutor.class;
                 case CLUSTERED -> ProcessorClusteredExecutorService.class;
                 default -> null;
             };
@@ -79,6 +80,7 @@ public class VirtualThreadsSchedulerComparisonBenchmark {
         SINGLE,
         SINGLE_WITH_AFFINITY,
         DEFAULT,
+        AFFINITY,
         CLUSTERED
     }
 
