@@ -19,6 +19,20 @@ public final class LinuxScheduling {
     }
 
     /**
+     * Return the processors online for the current system.
+     */
+    public static IntStream onlineProcessors() {
+        Path path = Path.of("/sys/devices/system/cpu/cpu/online");
+        String onlineCpus = null;
+        try {
+            onlineCpus = Files.readString(path).trim();
+        } catch (IOException e) {
+            throw new UncheckedIOException(e);
+        }
+        return parseCpuList(onlineCpus);
+    }
+
+    /**
      * Return the processors available to the current thread.
      * <p>
      * The {@link IntStream#count()} of the result will equal {@link Runtime#availableProcessors()}.
@@ -45,9 +59,9 @@ public final class LinuxScheduling {
     }
 
     /**
-     * Return the processors that share a cache with the given processor.
+     * Return the processors that share a last-level cache (LLC) with the given processor.
      */
-    public static IntStream sharedProcessors(int processorIndex) {
+    public static IntStream llcSharedProcessors(int processorIndex) {
         Path path = Path.of("/sys/devices/system/cpu/cpu" + processorIndex, "cache");
         try (Stream<Path> dirs = Files.list(path).filter(Files::isDirectory)) {
             int highestIndex = dirs.map(Path::getFileName)

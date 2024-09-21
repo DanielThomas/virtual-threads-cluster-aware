@@ -2,7 +2,6 @@ package com.netflix.sandbox;
 
 import java.util.*;
 import java.util.concurrent.*;
-import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
@@ -40,7 +39,7 @@ public class ProcessorClusteredExecutorService extends AbstractExecutorService {
         this.clusterSubmissions = clusterSubmissions;
 
         List<BitSet> clusters = LinuxScheduling.availableProcessors()
-            .mapToObj(LinuxScheduling::sharedProcessors).map(cpus -> {
+            .mapToObj(LinuxScheduling::llcSharedProcessors).map(cpus -> {
                 BitSet bs = new BitSet();
                 cpus.forEach(bs::set);
                 return bs;

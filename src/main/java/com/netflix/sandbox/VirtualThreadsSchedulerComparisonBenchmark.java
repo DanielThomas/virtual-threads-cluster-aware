@@ -30,7 +30,7 @@ public class VirtualThreadsSchedulerComparisonBenchmark {
             Class<? extends Executor> implClass = switch(scheduler) {
                 case SINGLE -> SingleThreadExecutor.class;
                 case SINGLE_WITH_AFFINITY -> SingleThreadWithAffinityExecutor.class;
-                case AFFINITY -> ForkJoinPoolWithAffinityExecutor.class;
+                case AFFINITY -> ThreadAffinityForkJoinPool.class;
                 case CLUSTERED -> ProcessorClusteredExecutorService.class;
                 default -> null;
             };

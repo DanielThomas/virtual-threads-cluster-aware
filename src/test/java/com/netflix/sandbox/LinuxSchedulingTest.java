@@ -20,7 +20,7 @@ public class LinuxSchedulingTest {
 
     @Test
     public void sharedProcessorsArePresent() {
-        IntStream sharedCpus = LinuxScheduling.sharedProcessors(0);
+        IntStream sharedCpus = LinuxScheduling.llcSharedProcessors(0);
 
         assertTrue(sharedCpus.findAny().isPresent());
     }
