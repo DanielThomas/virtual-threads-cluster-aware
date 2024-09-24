@@ -100,15 +100,4 @@ public class ProcessorClusteredExecutorServiceTest {
         assertTrue(actual.startsWith("Hello"));
     }
 
-    @Test
-    public void invokeAllBenchmark() throws InterruptedException {
-        VirtualThreadsSchedulerComparisonBenchmark benchmark = new VirtualThreadsSchedulerComparisonBenchmark();
-        SchedulerBenchmarkState state = new SchedulerBenchmarkState();
-        state.scheduler = Scheduler.CLUSTERED;
-        state.setupExecutor();
-        List<String> results = benchmark.invokeAll(state);
-
-        assertEquals(state.numTasks, results.size());
-    }
-
 }

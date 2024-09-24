@@ -21,7 +21,6 @@ public class ThreadAffinityForkJoinPool implements Executor {
     }
 
     private static ForkJoinPool createForkJoinPool(int parallelism) {
-        AtomicInteger workerCount = new AtomicInteger(); 
         int minRunnable = Integer.max(parallelism / 2, 1); // TODO copied from VirtualThread.createDefaultForkJoinPoolScheduler, related to compensation IIUC
         ForkJoinPool.ForkJoinWorkerThreadFactory factory = ThreadAffinity.forkJoinWorkerThreadFactory();
         Thread.UncaughtExceptionHandler handler = (_, _) -> {
