@@ -42,13 +42,24 @@ public class ThreadAffinity {
         };
     }
 
+    public static int numDomains() {
+        return (int) LinuxScheduling.availableProcessors()
+            .mapToObj(LinuxScheduling::llcSharedProcessors)
+            .map(i -> {
+                BitSet cpus = new BitSet();
+                i.forEach(cpus::set);
+                return cpus;
+            }).distinct()
+            .count();
+    }
+
     private static class ThreadAffinityState {
-        private final BitSet[] clusters;
+        private final BitSet[] domains;
         private final int[] counts;
         private int affinity;
 
         private ThreadAffinityState() {
-            clusters = LinuxScheduling.availableProcessors()
+            domains = LinuxScheduling.availableProcessors()
                 .mapToObj(LinuxScheduling::llcSharedProcessors)
                 .map(i -> {
                     BitSet cpus = new BitSet();
@@ -56,15 +67,15 @@ public class ThreadAffinity {
                     return cpus;
                 }).distinct()
                 .toArray(BitSet[]::new);
-            counts = new int[clusters.length];
+            counts = new int[domains.length];
         }
 
         private void threadStarted() {
             synchronized (this) {
                 int min = Integer.MAX_VALUE;
-                for (int i = 0; i < clusters.length; i++) {
+                for (int i = 0; i < domains.length; i++) {
                     int count = counts[i];
-                    int numProcs = clusters[i].cardinality();
+                    int numProcs = domains[i].cardinality();
                     if (count < numProcs) {
                         affinity = i;
                         break;
@@ -76,7 +87,7 @@ public class ThreadAffinity {
                     }
                 }
                 counts[affinity]++;
-                LinuxScheduling.currentThreadAffinity(clusters[affinity]);
+                LinuxScheduling.currentThreadAffinity(domains[affinity]);
                 Thread t = Thread.currentThread();
                 t.setName(t.getName() + "-affinity-" + affinity);
             }

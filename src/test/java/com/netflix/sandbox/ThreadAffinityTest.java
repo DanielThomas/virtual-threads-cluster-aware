@@ -10,6 +10,8 @@ import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.IntStream;
 
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
 public class ThreadAffinityTest {
 
     @Test
@@ -51,6 +53,13 @@ public class ThreadAffinityTest {
             }).toList();
             results.toString();
         }
+    }
+
+    @Test
+    public void numDomains() {
+        int domains = ThreadAffinity.numDomains();
+
+        assertTrue(domains > 0);
     }
 
 }

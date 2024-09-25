@@ -82,6 +82,7 @@ public class LinuxSchedulingTest {
         BitSet invalidMask = new BitSet();
         invalidMask.set(Runtime.getRuntime().availableProcessors());
         RuntimeException e = Assertions.assertThrows(RuntimeException.class, () -> LinuxScheduling.currentThreadAffinity(invalidMask));
+
         assertEquals("sched_setaffinity failed with errno: 22", e.getMessage());
     }
 
@@ -91,7 +92,22 @@ public class LinuxSchedulingTest {
         invalidMask.set(1025);
         invalidMask.set(Runtime.getRuntime().availableProcessors());
         IndexOutOfBoundsException e = Assertions.assertThrows(IndexOutOfBoundsException.class, () -> LinuxScheduling.currentThreadAffinity(invalidMask));
+
         assertEquals("Index 17 out of bounds for length 16", e.getMessage());
+    }
+
+    @Test
+    public void cacheLevelsPresent() {
+        int numCacheLevels = LinuxScheduling.numCacheLevels(0);
+
+        assertTrue(numCacheLevels > 0);
+    }
+
+    @Test
+    public void cacheSizeInBytes() {
+        long cacheSize = LinuxScheduling.cacheSizeInBytes(0, 3);
+
+        assertTrue(cacheSize > 0);
     }
 
 }

@@ -90,6 +90,35 @@ public final class LinuxScheduling {
         return listNodes(path);
     }
 
+    public static int numCacheLevels(int processorIndex) {
+        Path path = Path.of("/sys/devices/system/cpu/cpu" + processorIndex, "cache");
+        try (Stream<Path> dirs = Files.list(path).filter(Files::isDirectory)) {
+            return dirs.map(Path::getFileName)
+                .map(Path::toString)
+                .filter(filename -> filename.startsWith("index"))
+                .mapToInt(filename -> Integer.parseInt(filename.substring(5)))
+                .max()
+                .getAsInt();
+        } catch (IOException e) {
+            throw new UncheckedIOException(e);
+        }
+    }
+
+    public static int cacheSizeInBytes(int processorIndex, int cacheLevel) {
+        Path path = Path.of("/sys/devices/system/cpu/cpu" + processorIndex, "cache", "index" + cacheLevel, "size");
+        try {
+            String size = Files.readString(path).trim();
+            String digits = size.chars()
+                .filter(Character::isDigit)
+                .collect(StringBuilder::new, StringBuilder::appendCodePoint, StringBuilder::append)
+                .toString();
+            String unit = size.substring(digits.length()); // TODO assume K for now
+            return Integer.parseInt(digits) * 1024;
+        } catch (IOException e) {
+            throw new UncheckedIOException(e);
+        }
+    }
+
     private static IntStream listNodes(Path path) {
         try (Stream<Path> dirs = Files.list(path).filter(Files::isDirectory)) {
             int[] nodes = dirs.map(Path::getFileName)
