@@ -15,7 +15,7 @@ public class VirtualThreadsSchedulerCacheStress {
 
     @State(Scope.Benchmark)
     public static class BenchmarkState {
-        @Param({"AFFINITY", "CLUSTERED" /*, "FORKJOIN", "DEFAULT" */})
+        @Param({"CLUSTERED", "DEFAULT"})
         public Scheduler scheduler;
         
         @Param({"0"})
@@ -31,7 +31,7 @@ public class VirtualThreadsSchedulerCacheStress {
         public void setupExecutor() {
             Class<? extends Executor> implClass = switch (scheduler) {
                 case AFFINITY -> ThreadAffinityForkJoinPool.class;
-                case CLUSTERED -> ProcessorClusteredExecutorService.class;
+                case CLUSTERED -> ClusteredExecutor.class;
                 case FORKJOIN -> DefaultForkJoinPool.class;
                 case DEFAULT -> null;
                 default -> throw new IllegalArgumentException("missing implClass condition for " + scheduler);
