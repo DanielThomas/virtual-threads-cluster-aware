@@ -1,9 +1,6 @@
 package com.netflix.sandbox;
 
-import java.util.BitSet;
-import java.util.Collection;
-import java.util.List;
-import java.util.Objects;
+import java.util.*;
 import java.util.concurrent.*;
 import java.util.function.DoubleSupplier;
 import java.util.function.IntFunction;
@@ -111,12 +108,7 @@ public class ClusteredExecutors {
         checkInvariants();
         checkClusterIndex(cluster);
         BitSet affinity = clusters().toList().get(cluster);
-        return pool -> new ForkJoinWorkerThread(pool) {
-            protected void onStart() {
-                super.onStart();
-                currentThreadAffinity(cluster, affinity);
-            }
-        };
+        return pool -> new ClusteredForkJoinPoolWorkerThread(pool, cluster, affinity);
     }
 
     /**
@@ -162,6 +154,22 @@ public class ClusteredExecutors {
             }).distinct();
     }
 
+    private static final class ClusteredForkJoinPoolWorkerThread extends ForkJoinWorkerThread {
+        private final int cluster;
+        private final BitSet affinity;
+
+        private ClusteredForkJoinPoolWorkerThread(ForkJoinPool pool, int cluster, BitSet affinity) {
+            super(pool);
+            this.cluster = cluster;
+            this.affinity = affinity;
+        }
+
+        protected void onStart() {
+            super.onStart();
+            currentThreadAffinity(cluster, affinity);
+        }
+    }
+
     /**
      * Wrapper class that only exposes {@link ExecutorService methods, preventing configuration
      * of the service by downstream callers and adding additional private methods supporting the
@@ -174,6 +182,10 @@ public class ClusteredExecutors {
         private ClusteredExecutor(ExecutorService e, DoubleSupplier load) {
             this.e = e;
             this.load = load;
+        }
+
+        private ExecutorService delegate() {
+            return e;
         }
 
         private double load() {
@@ -265,10 +277,17 @@ public class ClusteredExecutors {
 
         @Override
         public void execute(Runnable command) {
-            // FIXME recursive submissions need to go to the current pool, need a ClusteredThread/ClusteredForkJoinWorker to hold onto the owner/affinity/cluster id
             if (pools.size() == 1) {
                 pools.getFirst().execute(command);
                 return;
+            }
+            // TODO implement recursive submission for other pools too?
+            if (Thread.currentThread() instanceof ClusteredForkJoinPoolWorkerThread t) {
+                Optional<ClusteredExecutor> pool = pools.stream().filter(p -> p.delegate() == t.getPool()).findFirst();
+                if (pool.isPresent()) {
+                    pool.get().execute(command);
+                    return;
+                }
             }
             ThreadLocalRandom random = ThreadLocalRandom.current();
             int poolIdx = random.nextInt(pools.size());
