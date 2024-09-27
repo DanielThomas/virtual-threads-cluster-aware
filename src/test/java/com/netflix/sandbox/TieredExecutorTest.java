@@ -2,7 +2,6 @@ package com.netflix.sandbox;
 
 import org.junit.jupiter.api.Test;
 
-import java.util.TreeSet;
 import java.util.concurrent.*;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -12,7 +11,7 @@ public class ClusteredExecutorTest {
 
     @Test
     public void canExecute() throws InterruptedException {
-        try (ExecutorService executor = new ClusteredExecutor()) {
+        try (ExecutorService executor = new TieredExecutor()) {
             CountDownLatch latch = new CountDownLatch(1);
             executor.execute(latch::countDown);
             assertTrue(latch.await(100, TimeUnit.MILLISECONDS));
@@ -21,7 +20,7 @@ public class ClusteredExecutorTest {
 
     @Test
     public void doesClusterWorkerSubmissions() throws InterruptedException, ExecutionException {
-        try (ClusteredExecutor executor = new ClusteredExecutor()) {
+        try (TieredExecutor executor = new TieredExecutor()) {
             try {
                 executor.submit(() -> {
                         for (int i = 0; i < 100; i++) {
@@ -45,8 +44,8 @@ public class ClusteredExecutorTest {
 
     @Test
     public void submitBenchmark() throws InterruptedException, ExecutionException {
-        ClusteredExecutorTaskBenchmark benchmark = new ClusteredExecutorTaskBenchmark();
-        ClusteredExecutorTaskBenchmark.TaskBenchmarkState state = new ClusteredExecutorTaskBenchmark.TaskBenchmarkState();
+        TieredExecutorTaskBenchmark benchmark = new TieredExecutorTaskBenchmark();
+        TieredExecutorTaskBenchmark.TaskBenchmarkState state = new TieredExecutorTaskBenchmark.TaskBenchmarkState();
         state.setupExecutor();
         int result = benchmark.submit(state);
 

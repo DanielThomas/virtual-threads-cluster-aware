@@ -1,17 +1,14 @@
 package com.netflix.sandbox;
 
 import org.openjdk.jmh.annotations.*;
-import org.openjdk.jmh.infra.Blackhole;
 import org.openjdk.jmh.runner.Runner;
 import org.openjdk.jmh.runner.RunnerException;
 import org.openjdk.jmh.runner.options.Options;
 import org.openjdk.jmh.runner.options.OptionsBuilder;
 
-import java.util.List;
 import java.util.concurrent.*;
-import java.util.stream.IntStream;
 
-public class ClusteredExecutorTaskBenchmark {
+public class TieredExecutorTaskBenchmark {
 
     @State(Scope.Benchmark)
     public static class TaskBenchmarkState {
@@ -20,7 +17,7 @@ public class ClusteredExecutorTaskBenchmark {
 
         @Setup(Level.Trial)
         public void setupExecutor() {
-            executor = new ClusteredExecutor();
+            executor = new TieredExecutor();
             task = () -> 0;
         }
 
@@ -47,7 +44,7 @@ public class ClusteredExecutorTaskBenchmark {
 
     public static void main(String[] args) throws RunnerException {
         Options opt = new OptionsBuilder()
-            .include(ClusteredExecutorTaskBenchmark.class.getSimpleName())
+            .include(TieredExecutorTaskBenchmark.class.getSimpleName())
             .warmupIterations(5)
             .measurementIterations(5)
             .forks(1)

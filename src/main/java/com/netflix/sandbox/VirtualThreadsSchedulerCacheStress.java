@@ -15,11 +15,8 @@ public class VirtualThreadsSchedulerCacheStress {
 
     @State(Scope.Benchmark)
     public static class BenchmarkState {
-        @Param({"CLUSTERED", "DEFAULT"})
+        @Param({"CLUSTERED_FJP", "DEFAULT"})
         public Scheduler scheduler;
-        
-        @Param({"0"})
-        public int parallelism;
 
         public ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
 
@@ -30,26 +27,21 @@ public class VirtualThreadsSchedulerCacheStress {
         @Setup(Level.Trial)
         public void setupExecutor() {
             Class<? extends Executor> implClass = switch (scheduler) {
-                case AFFINITY -> ThreadAffinityForkJoinPool.class;
-                case CLUSTERED -> ClusteredExecutor.class;
-                case FORKJOIN -> DefaultForkJoinPool.class;
+                case CLUSTERED_FJP -> ClusteredForkJoinPool.class;
+                case TIERED -> TieredExecutor.class;
                 case DEFAULT -> null;
                 default -> throw new IllegalArgumentException("missing implClass condition for " + scheduler);
             };
-            if (parallelism <= 0) {
-                parallelism = Runtime.getRuntime().availableProcessors();
-            }
-            System.setProperty("jdk.virtualThreadScheduler.parallelism", String.valueOf(parallelism));
             if (implClass != null) {
                 System.setProperty("jdk.virtualThreadScheduler.implClass", implClass.getCanonicalName());
             }
-            int numDomains = ThreadAffinity.numDomains();
-            data = new int[numDomains][];
+            int numClusters = ClusteredExecutors.availableClusters();
+            data = new int[numClusters][];
             int cacheSize = LinuxScheduling.cacheSizeInBytes(0, 3);
-            tasks = IntStream.range(0, numDomains).mapToObj(i -> {
+            tasks = IntStream.range(0, numClusters).mapToObj(i -> {
                 data[i] = ThreadLocalRandom.current().ints(cacheSize).toArray();
                 return (Callable<List<Integer>>) () -> {
-                    List<Future<Integer>> futures = IntStream.range(0, parallelism / numDomains)
+                    List<Future<Integer>> futures = IntStream.range(0, Runtime.getRuntime().availableProcessors() / numClusters)
                         .mapToObj(_ -> executor.submit(() -> Arrays.hashCode(data[i])))
                         .toList();
                     return futures.stream()
@@ -90,9 +82,8 @@ public class VirtualThreadsSchedulerCacheStress {
 
     public enum Scheduler {
         DEFAULT,
-        FORKJOIN,
-        AFFINITY,
-        CLUSTERED
+        TIERED,
+        CLUSTERED_FJP
     }
 
 }

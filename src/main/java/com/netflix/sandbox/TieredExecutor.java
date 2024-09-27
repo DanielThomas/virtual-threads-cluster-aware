@@ -12,7 +12,7 @@ import java.util.stream.IntStream;
 /**
  * An {@link ExecutorService} ...
  */
-public class ClusteredExecutor extends AbstractExecutorService {
+public class TieredExecutor extends AbstractExecutorService {
 
     private static final AtomicLong EXECUTOR_ID = new AtomicLong();
     private static final int LOCAL_QUEUE_SIZE = 256; // FIXME this should be a factor * number of CPUs in a domain
@@ -22,11 +22,11 @@ public class ClusteredExecutor extends AbstractExecutorService {
     private final RunQueue queue;
 
     /**
-     * Creates a {@link ClusteredExecutor} with parallelism and clusters
+     * Creates a {@link TieredExecutor} with parallelism and clusters
      * automatically determined the currently available processors and the highest level cache
      * shared between those processors.
      */
-    public ClusteredExecutor() {
+    public TieredExecutor() {
         BitSet[] domainAffinity = LinuxScheduling.availableProcessors()
             .mapToObj(LinuxScheduling::llcSharedProcessors).map(cpus -> {
                 BitSet bs = new BitSet();
@@ -118,13 +118,13 @@ public class ClusteredExecutor extends AbstractExecutorService {
     private static class RunQueue extends AbstractQueue<Runnable> implements BlockingQueue<Runnable> {
         private static final int SPIN_WAITS = 128;
 
-        private final ClusteredExecutor owner;
+        private final TieredExecutor owner;
         private final Lock lock = new ReentrantLock();
         private final Queue<Runnable> external;
         private final Queue<Runnable>[] local;
         private final Condition[] notEmpty;
 
-        private RunQueue(ClusteredExecutor owner, int numDomains) {
+        private RunQueue(TieredExecutor owner, int numDomains) {
             this.owner = owner;
             this.external = new LinkedList<>();
             this.local = IntStream.range(0, numDomains)
@@ -230,10 +230,10 @@ public class ClusteredExecutor extends AbstractExecutorService {
     }
 
     private static class Worker extends Thread {
-        private final ClusteredExecutor owner;
+        private final TieredExecutor owner;
         private final int domain;
 
-        private Worker(ThreadGroup group, Runnable task, String name, ClusteredExecutor owner, int domain) {
+        private Worker(ThreadGroup group, Runnable task, String name, TieredExecutor owner, int domain) {
             super(group, task, name);
             setDaemon(true);
             this.owner = owner;
