@@ -15,7 +15,7 @@ public class VirtualThreadsSchedulerCacheStress {
 
     @State(Scope.Benchmark)
     public static class BenchmarkState {
-        @Param({"CLUSTERED_FJP", "DEFAULT"})
+        @Param({"CHOOSE_TWO", "DEFAULT"})
         public Scheduler scheduler;
 
         public ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
@@ -27,21 +27,22 @@ public class VirtualThreadsSchedulerCacheStress {
         @Setup(Level.Trial)
         public void setupExecutor() {
             Class<? extends Executor> implClass = switch (scheduler) {
-                case CLUSTERED_FJP -> ClusteredForkJoinPool.class;
-                case TIERED -> TieredExecutor.class;
+                case BIASED -> BiasedExecutor.class;
+                case CHOOSE_TWO -> ChooseTwoExecutor.class;
                 case DEFAULT -> null;
                 default -> throw new IllegalArgumentException("missing implClass condition for " + scheduler);
             };
             if (implClass != null) {
                 System.setProperty("jdk.virtualThreadScheduler.implClass", implClass.getCanonicalName());
             }
-            int numClusters = ClusteredExecutors.availableClusters();
+            List<ClusteredExecutors.Cluster> clusters = ClusteredExecutors.availableClusters();
+            int numClusters = clusters.size();
             data = new int[numClusters][];
-            int cacheSize = LinuxScheduling.cacheSizeInBytes(0, 3);
             tasks = IntStream.range(0, numClusters).mapToObj(i -> {
-                data[i] = ThreadLocalRandom.current().ints(cacheSize).toArray();
+                ClusteredExecutors.Cluster cluster = clusters.get(i);
+                data[i] = ThreadLocalRandom.current().ints(cluster.cacheSizeInBytes().getAsInt()).toArray();
                 return (Callable<List<Integer>>) () -> {
-                    List<Future<Integer>> futures = IntStream.range(0, Runtime.getRuntime().availableProcessors() / numClusters)
+                    List<Future<Integer>> futures = IntStream.range(0, clusters.getFirst().parallelism())
                         .mapToObj(_ -> executor.submit(() -> Arrays.hashCode(data[i])))
                         .toList();
                     return futures.stream()
@@ -74,7 +75,7 @@ public class VirtualThreadsSchedulerCacheStress {
             .include(VirtualThreadsSchedulerCacheStress.class.getSimpleName())
             .warmupIterations(5)
             .measurementIterations(5)
-            .forks(1)
+            .forks(0)
             .build();
 
         new Runner(opt).run();
@@ -82,8 +83,8 @@ public class VirtualThreadsSchedulerCacheStress {
 
     public enum Scheduler {
         DEFAULT,
-        TIERED,
-        CLUSTERED_FJP
+        CHOOSE_TWO,
+        BIASED
     }
 
 }
