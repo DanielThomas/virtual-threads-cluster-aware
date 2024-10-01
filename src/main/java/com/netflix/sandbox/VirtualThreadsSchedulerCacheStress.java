@@ -42,7 +42,7 @@ public class VirtualThreadsSchedulerCacheStress {
                 ClusteredExecutors.Cluster cluster = clusters.get(i);
                 data[i] = ThreadLocalRandom.current().ints(cluster.cacheSizeInBytes().getAsInt()).toArray();
                 return (Callable<List<Integer>>) () -> {
-                    List<Future<Integer>> futures = IntStream.range(0, clusters.getFirst().parallelism())
+                    List<Future<Integer>> futures = IntStream.range(0, clusters.getFirst().availableProcessors())
                         .mapToObj(_ -> executor.submit(() -> Arrays.hashCode(data[i])))
                         .toList();
                     return futures.stream()

@@ -83,7 +83,7 @@ public class ClusteredExecutors {
         }
         Cluster cluster = ((ClusteredThreadFactory) threadFactory).cluster;
         return new ForkJoinPool
-            (cluster.parallelism(),
+            (cluster.availableProcessors(),
                 pool -> new ClusteredForkJoinPoolWorkerThread(pool, cluster),
                 null, true);
     }
@@ -156,17 +156,10 @@ public class ClusteredExecutors {
         }
 
         /*
-         * Return the ideal number of threads for CPU bound workers on this cluster.
+         * Return the number of available processors in this cluster.
          */
-        public int parallelism() {
+        public int availableProcessors() {
             return processors.cardinality();
-        }
-
-        /**
-         * Return a {@link BitSet} describing the processors in this cluster.
-         */
-        public BitSet processors() {
-            return (BitSet) processors.clone();
         }
 
         /**
@@ -492,7 +485,7 @@ public class ClusteredExecutors {
                 .map(ClusteredExecutors::clusteredThreadFactory)
                 .map(threadFactory -> {
                     Cluster cluster = ((ClusteredThreadFactory) threadFactory).cluster;
-                    return factory.apply(cluster.parallelism(), threadFactory);
+                    return factory.apply(cluster.availableProcessors(), threadFactory);
                 })
                 .toList());
         }
