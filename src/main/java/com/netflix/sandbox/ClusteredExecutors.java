@@ -119,7 +119,6 @@ public class ClusteredExecutors {
             case BIASED -> new BiasedExecutor(factory);
             case CHOOSE_TWO -> new ChooseTwoExecutor(factory);
             case CURRENT -> new CurrentClusterExecutor(factory);
-            case LEAST_LOADED -> throw new UnsupportedOperationException();
             case ROUND_ROBIN -> new RoundRobinExecutor(factory);
         };
     }
@@ -132,7 +131,6 @@ public class ClusteredExecutors {
             case BIASED -> new BiasedExecutor(factory);
             case CHOOSE_TWO -> new ChooseTwoExecutor(factory);
             case CURRENT -> new CurrentClusterExecutor(factory);
-            case LEAST_LOADED -> throw new UnsupportedOperationException();
             case ROUND_ROBIN -> new RoundRobinExecutor(factory);
         };
     }
@@ -586,8 +584,7 @@ public class ClusteredExecutors {
         CURRENT,
         BIASED,
         CHOOSE_TWO,
-        ROUND_ROBIN,
-        LEAST_LOADED
+        ROUND_ROBIN
     }
 
     private static abstract class ClusterPlacementExecutor extends AbstractExecutorService {
@@ -616,7 +613,7 @@ public class ClusteredExecutors {
             this.pools = IntStream.range(0, pools.size())
                 .mapToObj(i -> {
                     ExecutorService executor = pools.get(i);
-                    DoubleSupplier loadSupplier = loadFunction(executor);
+                    DoubleSupplier loadSupplier = loadSupplier(executor);
                     int[] neighbors = IntStream.range(0, pools.size())
                         .filter(j -> j != i)
                         .toArray();
@@ -624,7 +621,7 @@ public class ClusteredExecutors {
                 }).toList();
         }
 
-        private DoubleSupplier loadFunction(ExecutorService executor) {
+        private DoubleSupplier loadSupplier(ExecutorService executor) {
             return switch (executor) {
                 case ThreadPoolExecutor pool -> () -> {
                     long taskCount = pool.getActiveCount() + (pool.getCompletedTaskCount() - pool.getTaskCount());
