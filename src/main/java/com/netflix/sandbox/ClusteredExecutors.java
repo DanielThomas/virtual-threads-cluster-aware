@@ -73,30 +73,12 @@ public class ClusteredExecutors {
 
     /**
      * Creates a work-stealing thread pool. Convenience method allowing static function references to be used with the
-     * methods in this class that accept a {@link ThreadFactory}.
-     *
-     * @throws IllegalArgumentException if the provided thread factory did not originate from one of the supported
-     *                                  methods in this class.
-     */
-    public static ExecutorService newWorkStealingPool(ThreadFactory threadFactory) {
-        if (!(threadFactory instanceof ClusteredThreadFactory)) {
-            throw new IllegalArgumentException("These methods are intended for use only with ThreadFactory instances provided by this class");
-        }
-        Cluster cluster = ((ClusteredThreadFactory) threadFactory).cluster;
-        return new ForkJoinPool
-            (cluster.availableProcessors(),
-                pool -> new ClusteredForkJoinPoolWorkerThread(pool, cluster),
-                null, true);
-    }
-
-    /**
-     * Creates a work-stealing thread pool. Convenience method allowing static function references to be used with the
      * methods in this class that accept an argument with the desired parallelism and a {@link ThreadFactory}.
      *
      * @throws IllegalArgumentException if the provided thread factory did not originate from one of the supported
      *                                  methods in this class.
      */
-    public static ExecutorService newWorkStealingPoolWithParallelism(int parallelism, ThreadFactory threadFactory) {
+    public static ExecutorService newWorkStealingPool(int parallelism, ThreadFactory threadFactory) {
         if (!(threadFactory instanceof ClusteredThreadFactory)) {
             throw new IllegalArgumentException("These methods are intended for use only with ThreadFactory instances provided by this class");
         }
@@ -108,13 +90,16 @@ public class ClusteredExecutors {
     }
 
     /**
-     * Creates a new {@link ExecutorService} backed by one or more services constrained to the available clusters.
+     * Creates a new {@link ExecutorService} backed by an separate executor per processor cluster, using the provided
+     * placement strategy to decide how to place tasks on the underlying threads.
+     *
+     *
      *
      * @param strategy the placement strategy for determining which underlying pool is selected for execution
      * @param factory  ...
      * @return the executor service
      */
-    public static ExecutorService newClusteredPool(PlacementStrategy strategy, Function<ThreadFactory, ExecutorService> factory) {
+    public static ExecutorService newClusteredPool(PlacementStrategy strategy, BiFunction<Integer, ThreadFactory, ExecutorService> factory) {
         return switch (strategy) {
             case BIASED -> new BiasedExecutor(factory);
             case CHOOSE_TWO -> new ChooseTwoExecutor(factory);
@@ -124,9 +109,13 @@ public class ClusteredExecutors {
     }
 
     /**
+     * Creates a new {@link ExecutorService} backed by an separate executor per processor cluster.
      *
+     * @param strategy the placement strategy for determining which underlying pool is selected for execution
+     * @param factory  ...
+     * @return the executor service
      */
-    public static ExecutorService newClusteredPoolWithSize(PlacementStrategy strategy, BiFunction<Integer, ThreadFactory, ExecutorService> factory) {
+    public static ExecutorService newClusteredPoolWithoutSize(PlacementStrategy strategy, Function<ThreadFactory, ExecutorService> factory) {
         return switch (strategy) {
             case BIASED -> new BiasedExecutor(factory);
             case CHOOSE_TWO -> new ChooseTwoExecutor(factory);
