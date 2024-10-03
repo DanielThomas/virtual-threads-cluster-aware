@@ -56,7 +56,7 @@ import java.util.stream.Stream;
 public class ClusteredExecutors {
 
     /**
-     * Returns the processor clusters available to the current thread.
+     * Returns the processor clusters available.
      */
     public static List<Cluster> availableClusters() {
         return SCHEDULING.availableClusters();
@@ -68,18 +68,19 @@ public class ClusteredExecutors {
      * @see Executors#defaultThreadFactory()
      */
     public static ThreadFactory clusteredThreadFactory(Cluster cluster) {
-        return new ClusteredThreadFactory(Executors.defaultThreadFactory(), cluster);
+        return new ClusteredThreadFactory(cluster);
     }
 
     /**
-     * Creates a work-stealing thread pool...
+     * Creates a work-stealing thread pool. Convenience method allowing static function references to be used with the
+     * methods in this class that accept a {@link ThreadFactory}.
      *
      * @throws IllegalArgumentException if the provided thread factory did not originate from one of the supported
      *                                  methods in this class.
      */
     public static ExecutorService newWorkStealingPool(ThreadFactory threadFactory) {
         if (!(threadFactory instanceof ClusteredThreadFactory)) {
-            throw new IllegalArgumentException("");
+            throw new IllegalArgumentException("These methods are intended for use only with ThreadFactory instances provided by this class");
         }
         Cluster cluster = ((ClusteredThreadFactory) threadFactory).cluster;
         return new ForkJoinPool
@@ -89,14 +90,15 @@ public class ClusteredExecutors {
     }
 
     /**
-     * Creates a work-stealing thread pool...
+     * Creates a work-stealing thread pool. Convenience method allowing static function references to be used with the
+     * methods in this class that accept an argument with the desired parallelism and a {@link ThreadFactory}.
      *
      * @throws IllegalArgumentException if the provided thread factory did not originate from one of the supported
      *                                  methods in this class.
      */
-    public static ExecutorService newWorkStealingPool(int parallelism, ThreadFactory threadFactory) {
+    public static ExecutorService newWorkStealingPoolWithParallelism(int parallelism, ThreadFactory threadFactory) {
         if (!(threadFactory instanceof ClusteredThreadFactory)) {
-            throw new IllegalArgumentException("");
+            throw new IllegalArgumentException("These methods are intended for use only with ThreadFactory instances provided by this class");
         }
         Cluster cluster = ((ClusteredThreadFactory) threadFactory).cluster;
         return new ForkJoinPool
@@ -106,31 +108,32 @@ public class ClusteredExecutors {
     }
 
     /**
-     * Creates a new load balancing {@link ExecutorService}, using the specified strategy to decide how to place load on the
-     * pools created by the factory.
+     * Creates a new {@link ExecutorService} backed by one or more services constrained to the available clusters.
      *
-     * @param strategy ...`
+     * @param strategy the placement strategy for determining which underlying pool is selected for execution
      * @param factory  ...
      * @return the executor service
      */
-    public static ExecutorService newLoadBalancingPool(LoadBalancingStrategy strategy, Function<ThreadFactory, ExecutorService> factory) {
+    public static ExecutorService newClusteredPool(PlacementStrategy strategy, Function<ThreadFactory, ExecutorService> factory) {
         return switch (strategy) {
             case BIASED -> new BiasedExecutor(factory);
             case CHOOSE_TWO -> new ChooseTwoExecutor(factory);
-            case ROUND_ROBIN -> new RoundRobinExecutor(factory);
+            case CURRENT -> new CurrentClusterExecutor(factory);
             case LEAST_LOADED -> throw new UnsupportedOperationException();
+            case ROUND_ROBIN -> new RoundRobinExecutor(factory);
         };
     }
 
     /**
      *
      */
-    public static ExecutorService newLoadBalancingPoolWithSize(LoadBalancingStrategy strategy, BiFunction<Integer, ThreadFactory, ExecutorService> factory) {
+    public static ExecutorService newClusteredPoolWithSize(PlacementStrategy strategy, BiFunction<Integer, ThreadFactory, ExecutorService> factory) {
         return switch (strategy) {
             case BIASED -> new BiasedExecutor(factory);
             case CHOOSE_TWO -> new ChooseTwoExecutor(factory);
-            case ROUND_ROBIN -> new RoundRobinExecutor(factory);
+            case CURRENT -> new CurrentClusterExecutor(factory);
             case LEAST_LOADED -> throw new UnsupportedOperationException();
+            case ROUND_ROBIN -> new RoundRobinExecutor(factory);
         };
     }
 
@@ -140,12 +143,12 @@ public class ClusteredExecutors {
     public static class Cluster {
         private final int index;
         private final BitSet processors;
-        private final int cacheSize;
+        private final long lastLevelCacheSize;
 
-        private Cluster(int index, BitSet processors, int cacheSize) {
+        private Cluster(int index, BitSet processors, long lastLevelCacheSize) {
             this.index = index;
             this.processors = processors;
-            this.cacheSize = cacheSize;
+            this.lastLevelCacheSize = lastLevelCacheSize;
         }
 
         /*
@@ -163,22 +166,24 @@ public class ClusteredExecutors {
         }
 
         /**
-         * Return the size of the last-level cache for this cluster.
+         * Return the size of the last-level cache for this cluster in bytes.
          */
-        public OptionalInt cacheSizeInBytes() {
-            if (cacheSize <= 0) {
-                return OptionalInt.empty();
+        public OptionalLong lastLevelCacheSize() {
+            if (lastLevelCacheSize <= 0) {
+                return OptionalLong.empty();
             }
-            return OptionalInt.of(cacheSize);
+            return OptionalLong.of(lastLevelCacheSize);
         }
 
         public String toString() {
-            return processors.toString();
+            return index + ": " + processors.toString();
         }
     }
 
     private interface ProcessorScheduling {
         List<Cluster> availableClusters();
+
+        Cluster currentCluster();
 
         void constrainCurrentThread(Cluster cluster);
     }
@@ -192,32 +197,76 @@ public class ClusteredExecutors {
         }
 
         @Override
+        public Cluster currentCluster() {
+            return ZERO;
+        }
+
+        @Override
         public void constrainCurrentThread(Cluster cluster) {
             // do nothing
         }
     }
 
-    private static final class LinuxProcessorScheduling implements ProcessorScheduling {
-        @Override
-        public List<Cluster> availableClusters() {
-            List<BitSet> sharedProcessors = onlineProcessors()
-                .mapToObj(this::sharedProcessors)
+    private static abstract class AbstractProcessorScheduling implements ProcessorScheduling {
+        private final List<Cluster> availableClusters;
+        private final List<Cluster> clusterByProcessor;
+
+        protected AbstractProcessorScheduling() {
+            Thread t = Thread.currentThread();
+            if (t instanceof ClusteredThread || t instanceof ClusteredForkJoinPoolWorkerThread) {
+                throw new IllegalStateException("Should not be called from clustered threads");
+            }
+            BitSet availableProcessors = availableProcessors();
+            List<BitSet> sharedProcessors = availableProcessors
+                .stream()
+                .mapToObj(this::lastLevelCacheSharedProcessors)
                 .map(i -> {
                     BitSet processors = new BitSet();
                     i.forEach(processors::set);
                     return processors;
                 }).distinct()
                 .toList();
-            return IntStream.range(0, sharedProcessors.size())
+            availableClusters = IntStream.range(0, sharedProcessors.size())
                 .mapToObj(i -> {
                     BitSet processors = sharedProcessors.get(i);
-                    int firstCpu = processors.nextSetBit(0);
-                    int cacheSize = sharedCache(firstCpu);
+                    int firstCpuId = processors.nextSetBit(0);
+                    long cacheSize = lastLevelCacheSize(firstCpuId);
                     return new Cluster(i, processors, cacheSize);
                 })
                 .toList();
+            clusterByProcessor = new ArrayList<>(availableProcessors.stream().max().getAsInt());
+            availableClusters.forEach(cluster ->
+                cluster.processors.stream().forEach(i -> clusterByProcessor.add(i, cluster))
+            );
         }
 
+        @Override
+        public final List<Cluster> availableClusters() {
+            return availableClusters;
+        }
+
+        @Override
+        public final Cluster currentCluster() {
+            return switch (Thread.currentThread()) {
+                case ClusteredThread t -> t.cluster;
+                case ClusteredForkJoinPoolWorkerThread t -> t.cluster;
+                default -> {
+                    int cpuId = currentProcessor();
+                    yield clusterByProcessor.get(cpuId);
+                }
+            };
+        }
+
+        protected abstract BitSet availableProcessors();
+
+        protected abstract int currentProcessor();
+
+        protected abstract IntStream lastLevelCacheSharedProcessors(int cpuId);
+
+        protected abstract long lastLevelCacheSize(int cpuId);
+    }
+
+    private static final class LinuxProcessorScheduling extends AbstractProcessorScheduling {
         @Override
         public void constrainCurrentThread(Cluster cluster) {
             try (Arena arena = Arena.ofConfined()) {
@@ -238,29 +287,52 @@ public class ClusteredExecutors {
             }
         }
 
-        private IntStream onlineProcessors() {
-            Path path = Path.of("/sys/devices/system/cpu/online");
-            String onlineCpus;
-            try {
-                onlineCpus = Files.readString(path).trim();
-            } catch (IOException e) {
-                throw new UncheckedIOException(e);
+        protected int currentProcessor() {
+            try (Arena arena = Arena.ofConfined()) {
+                MemorySegment capturedState = arena.allocate(CAPTURE_STATE_LAYOUT);
+                int result = (int) SCHED_GETCPU.invokeExact(capturedState);
+                if (result == -1) {
+                    int errno = (int) CAPTURE_STATE.get(capturedState, 0L);
+                    throw new RuntimeException("sched_getcpu failed with errno: " + errno);
+                }
+                return result;
+            } catch (Throwable e) {
+                throw wrapChecked(e);
             }
-            return parseCpuList(onlineCpus);
         }
 
-        private IntStream sharedProcessors(int cpuId) {
+        protected BitSet availableProcessors() {
+            try (Arena arena = Arena.ofConfined()) {
+                MemorySegment capturedState = arena.allocate(CAPTURE_STATE_LAYOUT);
+                MemorySegment cpu_set = arena.allocate(CPUSET_BYTE_SIZE);
+                try {
+                    int tid = (int) GETTID.invokeExact();
+                    int result = (int) SCHED_GETAFFINITY.invokeExact(capturedState, tid, cpu_set.byteSize(), cpu_set);
+                    if (result == -1) {
+                        int errno = (int) CAPTURE_STATE.get(capturedState, 0L);
+                        throw new RuntimeException("sched_getaffinity failed with errno: " + errno);
+                    }
+                } catch (Throwable e) {
+                    throw wrapChecked(e);
+                }
+                long[] longs = cpu_set.toArray(ValueLayout.JAVA_LONG);
+                return BitSet.valueOf(longs);
+            }
+        }
+
+        protected IntStream lastLevelCacheSharedProcessors(int cpuId) {
             int cacheLevel = maxCacheLevel(cpuId);
             Path path = Path.of("/sys/devices/system/cpu/cpu" + cpuId, "cache", "index" + cacheLevel, "shared_cpu_list");
+            String sharedCpus;
             try {
-                String sharedCpus = Files.readString(path).trim();
-                return parseCpuList(sharedCpus);
+                sharedCpus = Files.readString(path).trim();
             } catch (IOException e) {
                 throw new UncheckedIOException(e);
             }
+            return parseCpuList(sharedCpus);
         }
 
-        public static int maxCacheLevel(int cpuId) {
+        public int maxCacheLevel(int cpuId) {
             Path path = Path.of("/sys/devices/system/cpu/cpu" + cpuId, "cache");
             try (Stream<Path> dirs = Files.list(path).filter(Files::isDirectory)) {
                 return dirs.map(Path::getFileName)
@@ -274,7 +346,7 @@ public class ClusteredExecutors {
             }
         }
 
-        public static int sharedCache(int cpuId) {
+        public long lastLevelCacheSize(int cpuId) {
             int cacheLevel = maxCacheLevel(cpuId);
             Path path = Path.of("/sys/devices/system/cpu/cpu" + cpuId, "cache", "index" + cacheLevel, "size");
             try {
@@ -283,8 +355,8 @@ public class ClusteredExecutors {
                     .filter(Character::isDigit)
                     .collect(StringBuilder::new, StringBuilder::appendCodePoint, StringBuilder::append)
                     .toString();
-                String unit = size.substring(digits.length()); // TODO assume K for now
-                return Integer.parseInt(digits) * 1024;
+                // TODO assume K for now
+                return Long.parseLong(digits) * 1024;
             } catch (IOException e) {
                 throw new UncheckedIOException(e);
             }
@@ -304,12 +376,15 @@ public class ClusteredExecutors {
 
         // see https://github.com/bminor/glibc/blob/a2509a8bc955988f01f389a1cf74db3a9da42409/posix/bits/cpu-set.h#L27-L29
         private static final int CPUSET_SIZE = 1024 / (Byte.SIZE * (int) ValueLayout.JAVA_LONG.byteSize());
+        private static final int CPUSET_BYTE_SIZE = 1024 / Byte.SIZE;
 
         private static final StructLayout CAPTURE_STATE_LAYOUT;
         private static final VarHandle CAPTURE_STATE;
 
         private static final MethodHandle GETTID;
+        private static final MethodHandle SCHED_GETCPU;
         private static final MethodHandle SCHED_SETAFFINITY;
+        private static final MethodHandle SCHED_GETAFFINITY;
 
         static {
             Linker linker = Linker.nativeLinker();
@@ -323,6 +398,16 @@ public class ClusteredExecutors {
             FunctionDescriptor gettid_sig =
                 FunctionDescriptor.of(ValueLayout.JAVA_INT);
             GETTID = linker.downcallHandle(gettid_addr, gettid_sig);
+
+            MemorySegment getcpu_addr = stdLib.findOrThrow("sched_getcpu");
+            FunctionDescriptor getcpu_sig =
+                FunctionDescriptor.of(ValueLayout.JAVA_INT);
+            SCHED_GETCPU = linker.downcallHandle(getcpu_addr, getcpu_sig, ccs);
+
+            MemorySegment getaffinity_addr = stdLib.findOrThrow("sched_getaffinity");
+            FunctionDescriptor getaffinity_sig =
+                FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.JAVA_INT, ValueLayout.JAVA_LONG, ValueLayout.ADDRESS);
+            SCHED_GETAFFINITY = linker.downcallHandle(getaffinity_addr, getaffinity_sig, ccs);
 
             MemorySegment setaffinity_addr = stdLib.findOrThrow("sched_setaffinity");
             FunctionDescriptor setaffinity_sig =
@@ -343,6 +428,7 @@ public class ClusteredExecutors {
             // https://github.com/kimwalisch/primesieve/blob/bf8e09f5c7e1b26a9fd441a777098da55e3fb8c7/src/CpuInfo.cpp#L769
             // https://github.com/Genivia/ugrep/blob/13fa0774dfb3d9b6176fe75bac34b55a4674a268/src/ugrep.cpp#L533
             SCHEDULING = new UnsupportedProcessorScheduling();
+            System.err.println("WARNING: ClusteredExecutor does not support this platform and will fall-back to all processors allowed");
         }
     }
 
@@ -354,15 +440,50 @@ public class ClusteredExecutors {
         }
     }
 
-    private record ClusteredThreadFactory(ThreadFactory threadFactory, Cluster cluster) implements ThreadFactory {
+    /**
+     * Thread factory creating {@link ClusteredThread}s, but otherwise having the same behaviour as
+     * {@link Executors#defaultThreadFactory()}.
+     */
+    private static class ClusteredThreadFactory implements ThreadFactory {
+        private static final AtomicInteger poolNumber = new AtomicInteger(1);
+        private final Cluster cluster;
+        private final ThreadGroup group;
+        private final AtomicInteger threadNumber = new AtomicInteger(1);
+        private final String namePrefix;
+        private final String nameSuffix;
+
+        ClusteredThreadFactory(Cluster cluster) {
+            this.cluster = cluster;
+            group = Thread.currentThread().getThreadGroup();
+            namePrefix = "pool-" +
+                poolNumber.getAndIncrement() +
+                "-thread-";
+            nameSuffix = "-cluster-" + cluster.index;
+        }
+
         @Override
         public Thread newThread(Runnable r) {
-            Thread thread = threadFactory.newThread(() -> {
-                SCHEDULING.constrainCurrentThread(cluster);
-                r.run();
-            });
-            thread.setName(thread.getName() + "-cluster-" + cluster.index);
-            return thread;
+            Thread t = new ClusteredThread(group, r, namePrefix + threadNumber.getAndIncrement() + nameSuffix, cluster);
+            if (t.isDaemon())
+                t.setDaemon(false);
+            if (t.getPriority() != Thread.NORM_PRIORITY)
+                t.setPriority(Thread.NORM_PRIORITY);
+            return t;
+        }
+    }
+
+    private static final class ClusteredThread extends Thread {
+        private final Cluster cluster;
+
+        private ClusteredThread(ThreadGroup group, Runnable task, String name, Cluster cluster) {
+            super(group, task, name);
+            this.cluster = cluster;
+        }
+
+        @Override
+        public void run() {
+            SCHEDULING.constrainCurrentThread(cluster);
+            super.run();
         }
     }
 
@@ -461,17 +582,18 @@ public class ClusteredExecutors {
     /**
      *
      */
-    public enum LoadBalancingStrategy {
+    public enum PlacementStrategy {
+        CURRENT,
         BIASED,
         CHOOSE_TWO,
         ROUND_ROBIN,
         LEAST_LOADED
     }
 
-    private static abstract class LoadBalancingExecutor extends AbstractExecutorService {
+    private static abstract class ClusterPlacementExecutor extends AbstractExecutorService {
         private final List<ClusteredExecutor> pools;
 
-        private LoadBalancingExecutor(Function<ThreadFactory, ExecutorService> factory) {
+        private ClusterPlacementExecutor(Function<ThreadFactory, ExecutorService> factory) {
             this(availableClusters()
                 .stream()
                 .map(ClusteredExecutors::clusteredThreadFactory)
@@ -479,7 +601,7 @@ public class ClusteredExecutors {
                 .toList());
         }
 
-        private LoadBalancingExecutor(BiFunction<Integer, ThreadFactory, ExecutorService> factory) {
+        private ClusterPlacementExecutor(BiFunction<Integer, ThreadFactory, ExecutorService> factory) {
             this(availableClusters()
                 .stream()
                 .map(ClusteredExecutors::clusteredThreadFactory)
@@ -490,7 +612,7 @@ public class ClusteredExecutors {
                 .toList());
         }
 
-        private LoadBalancingExecutor(List<ExecutorService> pools) {
+        private ClusterPlacementExecutor(List<ExecutorService> pools) {
             this.pools = IntStream.range(0, pools.size())
                 .mapToObj(i -> {
                     ExecutorService executor = pools.get(i);
@@ -576,7 +698,27 @@ public class ClusteredExecutors {
         }
     }
 
-    private static final class ChooseTwoExecutor extends LoadBalancingExecutor {
+    private static final class CurrentClusterExecutor extends ClusterPlacementExecutor {
+        private CurrentClusterExecutor(Function<ThreadFactory, ExecutorService> factory) {
+            super(factory);
+        }
+
+        private CurrentClusterExecutor(BiFunction<Integer, ThreadFactory, ExecutorService> factory) {
+            super(factory);
+        }
+
+        @Override
+        protected ClusteredExecutor choosePool(List<ClusteredExecutor> pools) {
+            Cluster cluster = switch (Thread.currentThread()) {
+                case ClusteredThread t -> t.cluster;
+                case ClusteredForkJoinPoolWorkerThread t -> t.cluster;
+                default -> SCHEDULING.currentCluster();
+            };
+            return pools.get(cluster.index);
+        }
+    }
+
+    private static final class ChooseTwoExecutor extends ClusterPlacementExecutor {
         private ChooseTwoExecutor(Function<ThreadFactory, ExecutorService> factory) {
             super(factory);
         }
@@ -596,7 +738,7 @@ public class ClusteredExecutors {
         }
     }
 
-    private static final class RoundRobinExecutor extends LoadBalancingExecutor {
+    private static final class RoundRobinExecutor extends ClusterPlacementExecutor {
         private final AtomicInteger counter = new AtomicInteger();
 
         private RoundRobinExecutor(Function<ThreadFactory, ExecutorService> factory) {
@@ -614,7 +756,7 @@ public class ClusteredExecutors {
         }
     }
 
-    private static final class BiasedExecutor extends LoadBalancingExecutor {
+    private static final class BiasedExecutor extends ClusterPlacementExecutor {
         private BiasedExecutor(Function<ThreadFactory, ExecutorService> factory) {
             super(factory);
         }

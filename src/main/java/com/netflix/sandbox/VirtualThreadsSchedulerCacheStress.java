@@ -29,6 +29,7 @@ public class VirtualThreadsSchedulerCacheStress {
             Class<? extends Executor> implClass = switch (scheduler) {
                 case BIASED -> BiasedExecutor.class;
                 case CHOOSE_TWO -> ChooseTwoExecutor.class;
+                case CURRENT -> CurrentExecutor.class;
                 case DEFAULT -> null;
                 default -> throw new IllegalArgumentException("missing implClass condition for " + scheduler);
             };
@@ -40,7 +41,7 @@ public class VirtualThreadsSchedulerCacheStress {
             data = new int[numClusters][];
             tasks = IntStream.range(0, numClusters).mapToObj(i -> {
                 ClusteredExecutors.Cluster cluster = clusters.get(i);
-                data[i] = ThreadLocalRandom.current().ints(cluster.cacheSizeInBytes().getAsInt()).toArray();
+                data[i] = ThreadLocalRandom.current().ints(cluster.lastLevelCacheSize().getAsLong()).toArray();
                 return (Callable<List<Integer>>) () -> {
                     List<Future<Integer>> futures = IntStream.range(0, clusters.getFirst().availableProcessors())
                         .mapToObj(_ -> executor.submit(() -> Arrays.hashCode(data[i])))
@@ -75,7 +76,7 @@ public class VirtualThreadsSchedulerCacheStress {
             .include(VirtualThreadsSchedulerCacheStress.class.getSimpleName())
             .warmupIterations(5)
             .measurementIterations(5)
-            .forks(0)
+            .forks(1)
             .build();
 
         new Runner(opt).run();
@@ -84,6 +85,7 @@ public class VirtualThreadsSchedulerCacheStress {
     public enum Scheduler {
         DEFAULT,
         CHOOSE_TWO,
+        CURRENT,
         BIASED
     }
 
