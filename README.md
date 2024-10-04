@@ -2,7 +2,7 @@ Experiments exploring the potential benefits of cluster aware scheduling/worker 
 
 See https://mail.openjdk.org/pipermail/loom-dev/2024-September/007161.html for background.
 
-Benchmark run on an AWS EC2 `m7a.8xlarge` instance:
+Benchmarks run on an AWS EC2 `m7a.8xlarge` instance:
 
 ```
 # JMH version: 1.37
@@ -11,10 +11,24 @@ Benchmark run on an AWS EC2 `m7a.8xlarge` instance:
 # VM options: -Dfile.encoding=UTF-8 -Duser.country=US -Duser.language=en -Duser.variant
 ```
 
+External submission throughput:
 ```
-Benchmark                                          (scheduler)   Mode  Cnt      Score      Error  Units
-VirtualThreadsSchedulerComparisonBenchmark.submit    CLUSTERED  thrpt    5  40697.195 ±  356.746  ops/s
-VirtualThreadsSchedulerComparisonBenchmark.submit    DEFAULT    thrpt    5  30689.891 ± 9188.606  ops/s
+Benchmark                  (placement)   Mode  Cnt       Score       Error  Units
+ExternalSubmission.submit          FJP  thrpt    5   64702.102 ±  1615.238  ops/s
+ExternalSubmission.submit   CHOOSE_TWO  thrpt    5   79286.111 ±  1336.440  ops/s
+ExternalSubmission.submit  ROUND_ROBIN  thrpt    5   86255.203 ±   729.912  ops/s
+ExternalSubmission.submit      CURRENT  thrpt    5  102784.334 ± 13334.137  ops/s
+```
+
+
+```
+Benchmark                                  (multiplier)  (scheduler)   Mode  Cnt     Score     Error    Units
+VirtualThreadsSchedulerCacheStress.submit             1   CHOOSE_TWO  thrpt    5  4873.550 ± 290.117  ops/min (~1750% CPU)
+VirtualThreadsSchedulerCacheStress.submit             1      DEFAULT  thrpt    5  3782.106 ±  69.471  ops/min (~2650% CPU)
+VirtualThreadsSchedulerCacheStress.submit            10   CHOOSE_TWO  thrpt    5   453.875 ±  80.840  ops/min
+VirtualThreadsSchedulerCacheStress.submit            10      DEFAULT  thrpt    5   324.959 ±  25.635  ops/min
+VirtualThreadsSchedulerCacheStress.submit           100   CHOOSE_TWO  thrpt    5    44.731 ±  23.493  ops/min
+VirtualThreadsSchedulerCacheStress.submit           100      DEFAULT  thrpt    5    37.416 ±   5.211  ops/min
 ```
 
 ```
