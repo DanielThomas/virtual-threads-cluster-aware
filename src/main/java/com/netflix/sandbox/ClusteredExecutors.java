@@ -82,7 +82,6 @@ public class ClusteredExecutors {
      */
     public static ExecutorService newClusteredPool(PlacementStrategy strategy, BiFunction<Integer, ThreadFactory, ExecutorService> factory) {
         return switch (strategy) {
-            case BIASED -> new BiasedExecutor(factory);
             case CHOOSE_TWO -> new ChooseTwoExecutor(factory);
             case CURRENT -> new CurrentClusterExecutor(factory);
             case ROUND_ROBIN -> new RoundRobinExecutor(factory);
@@ -98,7 +97,6 @@ public class ClusteredExecutors {
      */
     public static ExecutorService newClusteredPoolWithoutSize(PlacementStrategy strategy, Function<ThreadFactory, ExecutorService> factory) {
         return switch (strategy) {
-            case BIASED -> new BiasedExecutor(factory);
             case CHOOSE_TWO -> new ChooseTwoExecutor(factory);
             case CURRENT -> new CurrentClusterExecutor(factory);
             case ROUND_ROBIN -> new RoundRobinExecutor(factory);
@@ -552,7 +550,6 @@ public class ClusteredExecutors {
      */
     public enum PlacementStrategy {
         CURRENT,
-        BIASED,
         CHOOSE_TWO,
         ROUND_ROBIN
     }
@@ -720,26 +717,6 @@ public class ClusteredExecutors {
         protected ClusteredExecutor choosePool(List<ClusteredExecutor> pools) {
             int index = counter.accumulateAndGet(1, (i, _) -> ++i >= pools.size() ? 0 : i);
             return pools.get(index);
-        }
-    }
-
-    private static final class BiasedExecutor extends ClusterPlacementExecutor {
-        private BiasedExecutor(Function<ThreadFactory, ExecutorService> factory) {
-            super(factory);
-        }
-
-        private BiasedExecutor(BiFunction<Integer, ThreadFactory, ExecutorService> factory) {
-            super(factory);
-        }
-
-        @Override
-        protected ClusteredExecutor choosePool(List<ClusteredExecutor> pools) {
-            Optional<ClusteredExecutor> pool = pools.stream()
-                .filter(p -> p.load() < 1.0)
-                .findFirst();
-            Optional<ClusteredExecutor> leastLoaded = pools.stream()
-                .min(Comparator.comparingDouble(ClusteredExecutor::load));
-            return pool.orElse(leastLoaded.get());
         }
     }
 

@@ -27,7 +27,6 @@ public class VirtualThreadsSchedulerCacheStress {
         @Setup(Level.Trial)
         public void setupExecutor() {
             Class<? extends Executor> implClass = switch (scheduler) {
-                case BIASED -> BiasedExecutor.class;
                 case CHOOSE_TWO -> ChooseTwoExecutor.class;
                 case CURRENT -> CurrentExecutor.class;
                 case DEFAULT -> null;
@@ -85,8 +84,7 @@ public class VirtualThreadsSchedulerCacheStress {
     public enum Scheduler {
         DEFAULT,
         CHOOSE_TWO,
-        CURRENT,
-        BIASED
+        CURRENT
     }
 
 }
