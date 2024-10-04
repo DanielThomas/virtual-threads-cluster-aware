@@ -2,32 +2,13 @@ package com.netflix.sandbox;
 
 import java.io.IOException;
 import java.io.UncheckedIOException;
-import java.lang.foreign.Arena;
-import java.lang.foreign.FunctionDescriptor;
-import java.lang.foreign.Linker;
-import java.lang.foreign.MemoryLayout;
-import java.lang.foreign.MemorySegment;
-import java.lang.foreign.StructLayout;
-import java.lang.foreign.SymbolLookup;
-import java.lang.foreign.ValueLayout;
+import java.lang.foreign.*;
 import java.lang.invoke.MethodHandle;
 import java.lang.invoke.VarHandle;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.*;
-import java.util.concurrent.AbstractExecutorService;
-import java.util.concurrent.Callable;
-import java.util.concurrent.ExecutionException;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.ForkJoinPool;
-import java.util.concurrent.ForkJoinWorkerThread;
-import java.util.concurrent.Future;
-import java.util.concurrent.ThreadFactory;
-import java.util.concurrent.ThreadLocalRandom;
-import java.util.concurrent.ThreadPoolExecutor;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.TimeoutException;
+import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.BiFunction;
 import java.util.function.DoubleSupplier;
@@ -613,12 +594,12 @@ public class ClusteredExecutors {
         private DoubleSupplier loadSupplier(ExecutorService executor) {
             return switch (executor) {
                 case ThreadPoolExecutor pool -> () -> {
-                    long taskCount = pool.getActiveCount() + (pool.getCompletedTaskCount() - pool.getTaskCount());
-                    return taskCount == 0 ? 0 : (double) taskCount / pool.getPoolSize();
+                    long taskCount = pool.getActiveCount() + pool.getQueue().size();
+                    return taskCount == 0 ? 0 : (double) taskCount / Math.max(pool.getCorePoolSize(), pool.getPoolSize());
                 };
                 case ForkJoinPool pool -> () -> {
                     long taskCount = pool.getActiveThreadCount() + pool.getQueuedSubmissionCount() + pool.getQueuedTaskCount();
-                    return taskCount == 0 ? 0 : (double) taskCount / pool.getParallelism();
+                    return taskCount == 0 ? 0 : (double) taskCount / Math.max(pool.getParallelism(), pool.getActiveThreadCount());
                 };
                 default ->
                     throw new IllegalArgumentException(executor.getClass() + " is not a supported ExecutorService implementation");
