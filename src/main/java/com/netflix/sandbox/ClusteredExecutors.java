@@ -583,7 +583,7 @@ public class ClusteredExecutors {
             this.pools = IntStream.range(0, pools.size())
                 .mapToObj(i -> {
                     ExecutorService executor = pools.get(i);
-                    DoubleSupplier loadSupplier = loadSupplier(executor);
+                    DoubleSupplier loadSupplier = threadQueueDepth(executor);
                     int[] neighbors = IntStream.range(0, pools.size())
                         .filter(j -> j != i)
                         .toArray();
@@ -591,15 +591,15 @@ public class ClusteredExecutors {
                 }).toList();
         }
 
-        private DoubleSupplier loadSupplier(ExecutorService executor) {
+        private DoubleSupplier threadQueueDepth(ExecutorService executor) {
             return switch (executor) {
                 case ThreadPoolExecutor pool -> () -> {
-                    long taskCount = pool.getActiveCount() + pool.getQueue().size();
+                    long taskCount = pool.getQueue().size();
                     return taskCount == 0 ? 0 : (double) taskCount / Math.max(pool.getCorePoolSize(), pool.getPoolSize());
                 };
                 case ForkJoinPool pool -> () -> {
-                    long taskCount = pool.getActiveThreadCount() + pool.getQueuedSubmissionCount() + pool.getQueuedTaskCount();
-                    return taskCount == 0 ? 0 : (double) taskCount / Math.max(pool.getParallelism(), pool.getActiveThreadCount());
+                    long taskCount = pool.getQueuedSubmissionCount() + pool.getQueuedTaskCount();
+                    return taskCount == 0 ? 0 : (double) taskCount / Math.max(pool.getParallelism(), pool.getPoolSize());
                 };
                 default ->
                     throw new IllegalArgumentException(executor.getClass() + " is not a supported ExecutorService implementation");
@@ -614,13 +614,13 @@ public class ClusteredExecutors {
                 pools.getFirst().execute(command);
                 return;
             }
-            // TODO should we pin recursive executions by default?
-            // TODO that decision needs to consider if this executor 'owns' the thread
+            ClusteredExecutor pool;
             if (Thread.currentThread() instanceof ClusteredForkJoinPoolWorkerThread t) {
-                t.getPool().execute(command);
-                return;
+                pool = pools.get(t.cluster.index);
+            } else {
+                pool = choosePool(pools);
             }
-            choosePool(pools).execute(command);
+            pool.execute(command);
         }
 
         @Override
