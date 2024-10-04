@@ -14,7 +14,7 @@ public class ExternalSubmission {
     
     @State(Scope.Benchmark)
     public static class BenchmarkState {
-        @Param({"BIASED", "CHOOSE_TWO", "ROUND_ROBIN", "FJP"})
+        @Param({"CHOOSE_TWO", "ROUND_ROBIN", "CURRENT", "FJP"})
         public String placement;
 
         public ExecutorService executor;

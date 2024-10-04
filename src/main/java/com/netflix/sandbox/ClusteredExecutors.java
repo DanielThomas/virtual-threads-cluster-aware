@@ -72,13 +72,14 @@ public class ClusteredExecutors {
 
     /**
      * Creates a new {@link ExecutorService} backed by an separate executor per processor cluster, using the provided
-     * placement strategy to decide how to place tasks on the underlying threads.
-     *
-     *
+     * placement strategy to decide how to place tasks on the underlying pools.
+     * <p>
+     * When used with {@link #newWorkStealingPool(int, ThreadFactory)} recursive executions of tasks from threads
+     * within the pool are submitted locally to the pool, without considering the placement strategy. 
      *
      * @param strategy the placement strategy for determining which underlying pool is selected for execution
-     * @param factory  ...
-     * @return the executor service
+     * @param factory a factory method to create executors for each cluster, for instance {@link Executors#newFixedThreadPool(int, ThreadFactory)}
+     * @return the resulting executor service
      */
     public static ExecutorService newClusteredPool(PlacementStrategy strategy, BiFunction<Integer, ThreadFactory, ExecutorService> factory) {
         return switch (strategy) {
@@ -89,11 +90,12 @@ public class ClusteredExecutors {
     }
 
     /**
-     * Creates a new {@link ExecutorService} backed by an separate executor per processor cluster.
+     * Creates a new {@link ExecutorService} backed by an separate pools per processor cluster, using the provided
+     * placement strategy to decide how to place tasks on the underlying threads.
      *
      * @param strategy the placement strategy for determining which underlying pool is selected for execution
-     * @param factory  ...
-     * @return the executor service
+     * @param factory a factory method to create executors for each cluster, for instance {@link Executors#newFixedThreadPool(int, ThreadFactory)}
+     * @return the resulting executor service
      */
     public static ExecutorService newClusteredPoolWithoutSize(PlacementStrategy strategy, Function<ThreadFactory, ExecutorService> factory) {
         return switch (strategy) {
@@ -468,9 +470,6 @@ public class ClusteredExecutors {
         }
     }
 
-    /**
-     * Delegate class adding functionality.
-     */
     private record ClusteredExecutor(ExecutorService e,
                                      DoubleSupplier loadSupplier,
                                      int[] neighbors) implements ExecutorService {
@@ -546,7 +545,7 @@ public class ClusteredExecutors {
     }
 
     /**
-     *
+     * Placement strategies for calls to clustered {@link ExecutorService#execute(Runnable)}.
      */
     public enum PlacementStrategy {
         CURRENT,
