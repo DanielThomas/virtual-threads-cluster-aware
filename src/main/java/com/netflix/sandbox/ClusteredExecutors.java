@@ -524,12 +524,8 @@ public class ClusteredExecutors {
                     ThreadPoolExecutor pool = (ThreadPoolExecutor) executor;
                     return pool.getQueue().size();
                 };
-                case ClusteredWorkStealingPool _ -> executor -> {
-                    ClusteredWorkStealingPool pool = (ClusteredWorkStealingPool) executor;
-                    return pool.getQueuedSubmissionCount();
-                };
                 case ForkJoinPool _ -> executor -> {
-                    ClusteredWorkStealingPool pool = (ClusteredWorkStealingPool) executor;
+                    ForkJoinPool pool = (ForkJoinPool) executor;
                     return pool.getQueuedSubmissionCount() + pool.getQueuedTaskCount();
                 };
                 default ->
