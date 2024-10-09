@@ -7,12 +7,12 @@ import java.lang.invoke.MethodHandle;
 import java.lang.invoke.VarHandle;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.function.BiFunction;
-import java.util.function.DoubleSupplier;
-import java.util.function.Function;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.*;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 import java.util.stream.Stream;
@@ -32,7 +32,6 @@ import java.util.stream.Stream;
  * be affected on threads created by this class, depending on how it's implemented on the platform.
  *
  * @author Danny Thomas
- * @since 1.0
  */
 public class ClusteredExecutors {
 
@@ -44,7 +43,7 @@ public class ClusteredExecutors {
     }
 
     /**
-     * A default thread factory that provides affinity to the given cluster for created threads.
+     * A default thread factory that provides affinity to the given {@link Cluster} for created threads.
      *
      * @see Executors#defaultThreadFactory()
      */
@@ -53,40 +52,50 @@ public class ClusteredExecutors {
     }
 
     /**
-     * Creates a work-stealing thread pool. Convenience method allowing static function references to be used with the
-     * methods in this class that accept an argument with the desired parallelism and a {@link ThreadFactory}.
-     *
-     * @throws IllegalArgumentException if the provided thread factory did not originate from one of the supported
-     *                                  methods in this class.
+     * Creates a work-stealing thread pool...
      */
-    public static ExecutorService newWorkStealingPool(int parallelism, ThreadFactory threadFactory) {
-        if (!(threadFactory instanceof ClusteredThreadFactory)) {
-            throw new IllegalArgumentException("These methods are intended for use only with ThreadFactory instances provided by this class");
-        }
-        Cluster cluster = ((ClusteredThreadFactory) threadFactory).cluster;
-        return new ForkJoinPool
-            (parallelism,
-                pool -> new ClusteredForkJoinPoolWorkerThread(pool, cluster),
-                null, true);
+    public static ExecutorService newWorkStealingPool() {
+        return newWorkStealingPool(PlacementStrategy.CHOOSE_TWO);
+    }
+
+    /**
+     * Creates a work-stealing thread pool...
+     */
+    public static ExecutorService newWorkStealingPool(PlacementStrategy strategy) {
+        return newWorkStealingPool(strategy, new ServiceLevel());
+    }
+
+    /**
+     * Creates a work-stealing thread pool...
+     */
+    public static ExecutorService newWorkStealingPool(PlacementStrategy strategy, ServiceLevel serviceLevel) {
+        int clusteredPoolId = POOL_IDS.incrementAndGet();
+        BiFunction<Integer, ThreadFactory, ExecutorService> factory = (parallelism, threadFactory) ->
+            new ClusteredForkJoinPool(parallelism, ((ClusteredThreadFactory) threadFactory).cluster, clusteredPoolId);
+        return new ClusterPlacementExecutor(clusteredPoolId, strategy, serviceLevel, factory);
+    }
+
+    /**
+     * Creates a new {@link ExecutorService} backed by an separate executor per processor cluster, using the
+     * {@link PlacementStrategy#CHOOSE_TWO} placement strategy.
+     *
+     * @param factory a factory method to create executors for each cluster, for instance {@link Executors#newFixedThreadPool(int, ThreadFactory)}
+     * @return the resulting executor service
+     */
+    public static ExecutorService newThreadPool(BiFunction<Integer, ThreadFactory, ExecutorService> factory) {
+        return newThreadPool(PlacementStrategy.CHOOSE_TWO, factory);
     }
 
     /**
      * Creates a new {@link ExecutorService} backed by an separate executor per processor cluster, using the provided
      * placement strategy to decide how to place tasks on the underlying pools.
-     * <p>
-     * When used with {@link #newWorkStealingPool(int, ThreadFactory)} recursive executions of tasks from threads
-     * within the pool are submitted locally to the pool, without considering the placement strategy. 
      *
      * @param strategy the placement strategy for determining which underlying pool is selected for execution
-     * @param factory a factory method to create executors for each cluster, for instance {@link Executors#newFixedThreadPool(int, ThreadFactory)}
+     * @param factory  a factory method to create executors for each cluster, for instance {@link Executors#newFixedThreadPool(int, ThreadFactory)}
      * @return the resulting executor service
      */
-    public static ExecutorService newClusteredPool(PlacementStrategy strategy, BiFunction<Integer, ThreadFactory, ExecutorService> factory) {
-        return switch (strategy) {
-            case CHOOSE_TWO -> new ChooseTwoExecutor(factory);
-            case CURRENT -> new CurrentClusterExecutor(factory);
-            case ROUND_ROBIN -> new RoundRobinExecutor(factory);
-        };
+    public static ExecutorService newThreadPool(PlacementStrategy strategy, BiFunction<Integer, ThreadFactory, ExecutorService> factory) {
+        return new ClusterPlacementExecutor(POOL_IDS.incrementAndGet(), strategy, new ServiceLevel(), factory);
     }
 
     /**
@@ -94,15 +103,11 @@ public class ClusteredExecutors {
      * placement strategy to decide how to place tasks on the underlying threads.
      *
      * @param strategy the placement strategy for determining which underlying pool is selected for execution
-     * @param factory a factory method to create executors for each cluster, for instance {@link Executors#newFixedThreadPool(int, ThreadFactory)}
+     * @param factory  a factory method to create executors for each cluster, for instance {@link Executors#newFixedThreadPool(int, ThreadFactory)}
      * @return the resulting executor service
      */
-    public static ExecutorService newClusteredPoolWithoutSize(PlacementStrategy strategy, Function<ThreadFactory, ExecutorService> factory) {
-        return switch (strategy) {
-            case CHOOSE_TWO -> new ChooseTwoExecutor(factory);
-            case CURRENT -> new CurrentClusterExecutor(factory);
-            case ROUND_ROBIN -> new RoundRobinExecutor(factory);
-        };
+    public static ExecutorService newThreadPoolWithoutSize(PlacementStrategy strategy, Function<ThreadFactory, ExecutorService> factory) {
+        return new ClusterPlacementExecutor(POOL_IDS.incrementAndGet(), strategy, new ServiceLevel(), factory);
     }
 
     /**
@@ -148,7 +153,421 @@ public class ClusteredExecutors {
         }
     }
 
-    private interface ProcessorScheduling {
+    private interface Clustered {
+        Cluster cluster();
+
+        OptionalInt clusteredPoolId();
+    }
+
+    /**
+     * Thread factory creating {@link ClusteredThread}s with the same behaviour as {@link Executors#defaultThreadFactory()}.
+     */
+    private static class ClusteredThreadFactory implements ThreadFactory {
+        private static final AtomicInteger poolNumber = new AtomicInteger(1);
+        private final Cluster cluster;
+        private final ThreadGroup group;
+        private final AtomicInteger threadNumber = new AtomicInteger(1);
+        private final String namePrefix;
+        private final String nameSuffix;
+        private final int clusteredPoolId;
+
+        ClusteredThreadFactory(Cluster cluster) {
+            this(cluster, -1);
+        }
+
+        ClusteredThreadFactory(Cluster cluster, int clusteredPoolId) {
+            this.cluster = cluster;
+            this.clusteredPoolId = clusteredPoolId;
+            group = Thread.currentThread().getThreadGroup();
+            namePrefix = "pool-" +
+                poolNumber.getAndIncrement() +
+                "-thread-";
+            nameSuffix = "-cluster-" + cluster.index;
+        }
+
+        @Override
+        public Thread newThread(Runnable r) {
+            Thread t = new ClusteredThread(group, r, namePrefix + threadNumber.getAndIncrement() + nameSuffix, cluster, clusteredPoolId);
+            if (t.isDaemon())
+                t.setDaemon(false);
+            if (t.getPriority() != Thread.NORM_PRIORITY)
+                t.setPriority(Thread.NORM_PRIORITY);
+            return t;
+        }
+    }
+
+    private static final class ClusteredThread extends Thread implements Clustered {
+        private final Cluster cluster;
+        private final int clusteredPoolId;
+
+        private ClusteredThread(ThreadGroup group, Runnable task, String name, Cluster cluster, int clusteredPoolId) {
+            super(group, task, name);
+            this.cluster = cluster;
+            this.clusteredPoolId = clusteredPoolId;
+        }
+
+        @Override
+        public void run() {
+            SCHEDULING.constrainCurrentThread(cluster);
+            super.run();
+        }
+
+        @Override
+        public Cluster cluster() {
+            return cluster;
+        }
+
+        @Override
+        public OptionalInt clusteredPoolId() {
+            if (clusteredPoolId <= 0) {
+                return OptionalInt.empty();
+            }
+            return OptionalInt.of(clusteredPoolId);
+        }
+    }
+
+    private static final class ClusteredForkJoinPoolWorkerThread extends ForkJoinWorkerThread implements Clustered {
+        private final Cluster cluster;
+        private final int clusteredPoolId;
+
+        private ClusteredForkJoinPoolWorkerThread(ForkJoinPool pool, Cluster cluster, int clusteredPoolId) {
+            super(pool);
+            this.cluster = cluster;
+            this.clusteredPoolId = clusteredPoolId;
+        }
+
+        protected void onStart() {
+            super.onStart();
+            SCHEDULING.constrainCurrentThread(cluster);
+            setName(getName() + "-cluster-" + cluster.index);
+        }
+
+        @Override
+        public Cluster cluster() {
+            return cluster;
+        }
+
+        @Override
+        public OptionalInt clusteredPoolId() {
+            if (clusteredPoolId <= 0) {
+                return OptionalInt.empty();
+            }
+            return OptionalInt.of(clusteredPoolId);
+        }
+    }
+
+    private static final class ClusteredForkJoinPool extends ForkJoinPool implements Clustered {
+        private final Cluster cluster;
+        private final int clusteredPoolId;
+
+        private ClusteredForkJoinPool(int parallelism, Cluster cluster, int clusteredPoolId) {
+            super(parallelism,
+                pool -> new ClusteredForkJoinPoolWorkerThread(pool, cluster, clusteredPoolId),
+                null, true);
+            this.cluster = cluster;
+            this.clusteredPoolId = clusteredPoolId;
+        }
+
+        public void execute(Runnable task) {
+            externalSubmit(ForkJoinTask.adapt(task));
+        }
+
+        @Override
+        public Cluster cluster() {
+            return cluster;
+        }
+
+        @Override
+        public OptionalInt clusteredPoolId() {
+            if (clusteredPoolId <= 0) {
+                return OptionalInt.empty();
+            }
+            return OptionalInt.of(clusteredPoolId);
+        }
+    }
+
+    /**
+     * TODO
+     */
+    public record ServiceLevel(Duration waitThreshold,
+                               Duration rebalanceThreshold) {
+        public ServiceLevel() {
+            this(Duration.ZERO, Duration.ZERO);
+        }
+    }
+
+    /**
+     * TODO
+     */
+    public enum PlacementStrategy implements ClusterPlacement {
+        /**
+         * TODO
+         */
+        BIASED {
+            @Override
+            public int choose(int[] candidateIndexes,
+                              IntToDoubleFunction loadFunction,
+                              ConcurrentMap<String, Object> state) {
+                return candidateIndexes[0];
+            }
+        },
+        /**
+         * TODO
+         */
+        CURRENT {
+            @Override
+            public int choose(int[] candidateIndexes,
+                              IntToDoubleFunction loadFunction,
+                              ConcurrentMap<String, Object> state) {
+                Cluster cluster = switch (Thread.currentThread()) {
+                    case ClusteredThread t -> t.cluster;
+                    case ClusteredForkJoinPoolWorkerThread t -> t.cluster;
+                    default -> SCHEDULING.currentCluster();
+                };
+                return cluster.index;
+            }
+        },
+        /**
+         * TODO
+         */
+        CHOOSE_TWO {
+            @Override
+            public int choose(int[] candidateIndexes,
+                              IntToDoubleFunction loadFunction,
+                              ConcurrentMap<String, Object> state) {
+                ThreadLocalRandom random = ThreadLocalRandom.current();
+                int index = random.nextInt(candidateIndexes.length);
+                int[] neighbors = IntStream.of(candidateIndexes)
+                    .filter(i -> i != index)
+                    .toArray();
+                int alternate = neighbors[random.nextInt(neighbors.length)];
+                return loadFunction.applyAsDouble(index) < loadFunction.applyAsDouble(alternate) ? index : alternate;
+            }
+        },
+        /**
+         * TODO
+         */
+        ROUND_ROBIN {
+            @Override
+            public int choose(int[] candidateIndexes,
+                              IntToDoubleFunction loadFunction,
+                              ConcurrentMap<String, Object> state) {
+                AtomicInteger counter = (AtomicInteger) state.computeIfAbsent("ROUND_ROBIN_COUNTER", _ -> new AtomicInteger());
+                int count = counter.accumulateAndGet(1, (i, _) -> ++i >= candidateIndexes.length ? 0 : i);
+                return candidateIndexes[count];
+            }
+        }
+    }
+
+    private interface ClusterPlacement {
+        int choose(int[] candidateClusters,
+                   IntToDoubleFunction loadFunction,
+                   ConcurrentMap<String, Object> state);
+    }
+
+    private static final class ClusterPlacementExecutor extends AbstractExecutorService {
+        private final int poolId;
+        private final PlacementStrategy strategy;
+        private final ServiceLevel serviceLevel;
+        private final List<ExecutorService> pools;
+        private final int[] poolIndexes;
+        private final ConcurrentMap<String, Object> strategyState;
+        private final List<AtomicLong> lastWaitTime;
+        private final ToLongFunction<ExecutorService> queuedTasksFunction;
+        private final ToIntFunction<ExecutorService> poolSizeFunction;
+        private final ToIntBiFunction<ExecutorService, Integer> availableThreadsFunction;
+
+        private ClusterPlacementExecutor(int poolId,
+                                         PlacementStrategy strategy,
+                                         ServiceLevel serviceLevel,
+                                         Function<ThreadFactory, ExecutorService> factory) {
+            this(poolId, strategy, serviceLevel, availableClusters()
+                .stream()
+                .map(cluster -> new ClusteredThreadFactory(cluster, poolId))
+                .map(factory)
+                .toList());
+        }
+
+        private ClusterPlacementExecutor(int poolId,
+                                         PlacementStrategy strategy,
+                                         ServiceLevel serviceLevel,
+                                         BiFunction<Integer, ThreadFactory, ExecutorService> factory) {
+            this(poolId, strategy, serviceLevel, availableClusters()
+                .stream()
+                .map(cluster -> new ClusteredThreadFactory(cluster, poolId))
+                .map(threadFactory -> {
+                    Cluster cluster = threadFactory.cluster;
+                    return factory.apply(cluster.availableProcessors(), threadFactory);
+                })
+                .toList());
+        }
+
+        private ClusterPlacementExecutor(int poolId,
+                                         PlacementStrategy strategy,
+                                         ServiceLevel serviceLevel,
+                                         List<ExecutorService> pools) {
+            this.poolId = poolId;
+            this.strategy = Objects.requireNonNull(strategy);
+            this.serviceLevel = Objects.requireNonNull(serviceLevel);
+            this.pools = Objects.requireNonNull(pools);
+            this.poolIndexes = IntStream.range(0, pools.size()).toArray();
+            this.strategyState = new ConcurrentHashMap<>();
+            this.lastWaitTime = pools.stream().map(_ -> new AtomicLong()).toList();
+            ExecutorService first = pools.stream().findFirst().get();
+            this.queuedTasksFunction = queuedTasksFunction(first);
+            this.poolSizeFunction = poolSizeFunction(first);
+            this.availableThreadsFunction = availableThreadsFunction(first);
+        }
+
+        @Override
+        public void execute(Runnable command) {
+            if (pools.size() == 1) {
+                pools.getFirst().execute(command);
+                return;
+            }
+            int index = -1;
+            if (Thread.currentThread() instanceof Clustered t) {
+                OptionalInt poolId = t.clusteredPoolId();
+                if (poolId.isPresent() && this.poolId == poolId.getAsInt()) {
+                    int current = t.cluster().index;
+                    if (meetsServiceLevel(current)) {
+                        index = current;
+                    }
+                }
+            }
+            if (index < 0) {
+                int[] candidates = IntStream.of(poolIndexes)
+                    .filter(this::meetsServiceLevel)
+                    .toArray();
+                if (candidates.length == 1) {
+                    index = candidates[0];
+                } else {
+                    if (candidates.length == 0) {
+                        candidates = poolIndexes;
+                    }
+                    index = strategy.choose(candidates, i -> {
+                        ExecutorService pool = pools.get(i);
+                        int poolSize = poolSizeFunction.applyAsInt(pool);
+                        return (double) queuedTasksFunction.applyAsLong(pool) / poolSize;
+                    }, strategyState);
+                }
+            }
+            Runnable task = command;
+            if (!serviceLevel.waitThreshold().isPositive()) {
+                AtomicLong lastWaitTime = this.lastWaitTime.get(index);
+                long arrivalTime = System.nanoTime();
+                task = () -> {
+                    lastWaitTime.set(System.nanoTime() - arrivalTime);
+                    command.run();
+                };
+            }
+            pools.get(index).execute(task);
+        }
+
+        @Override
+        public void shutdown() {
+            pools.forEach(ExecutorService::shutdown);
+        }
+
+        @Override
+        public List<Runnable> shutdownNow() {
+            return pools.stream().flatMap(pool -> pool.shutdownNow().stream()).toList();
+        }
+
+        @Override
+        public boolean isShutdown() {
+            return pools.stream().allMatch(ExecutorService::isShutdown);
+        }
+
+        @Override
+        public boolean isTerminated() {
+            return pools.stream().allMatch(ExecutorService::isTerminated);
+        }
+
+        @Override
+        public boolean awaitTermination(long timeout, TimeUnit unit) throws InterruptedException {
+            long current = System.nanoTime();
+            long remaining = unit.toNanos(timeout);
+            for (ExecutorService pool : pools) {
+                if (!pool.awaitTermination(remaining, unit)) {
+                    return false;
+                }
+                long elapsed = current - System.nanoTime();
+                remaining = remaining - elapsed;
+            }
+            return true;
+        }
+
+        @Override
+        public String toString() {
+            return IntStream.range(0, pools.size())
+                .mapToObj(i -> i + ": " + pools.get(i))
+                .collect(Collectors.joining("\n"));
+        }
+
+        private ToLongFunction<ExecutorService> queuedTasksFunction(ExecutorService first) {
+            return switch (first) {
+                case ThreadPoolExecutor _ -> executor -> {
+                    ThreadPoolExecutor pool = (ThreadPoolExecutor) executor;
+                    return pool.getQueue().size();
+                };
+                case ClusteredForkJoinPool _ -> executor -> {
+                    ClusteredForkJoinPool pool = (ClusteredForkJoinPool) executor;
+                    return pool.getQueuedSubmissionCount();
+                };
+                case ForkJoinPool _ -> executor -> {
+                    ClusteredForkJoinPool pool = (ClusteredForkJoinPool) executor;
+                    return pool.getQueuedSubmissionCount() + pool.getQueuedTaskCount();
+                };
+                default ->
+                    throw new IllegalArgumentException(first.getClass() + " is not supported. Must be a ThreadPoolExecutor or ForkJoinPool");
+            };
+        }
+
+        private ToIntFunction<ExecutorService> poolSizeFunction(ExecutorService first) {
+            return switch (first) {
+                case ThreadPoolExecutor _ -> executor -> {
+                    ThreadPoolExecutor pool = (ThreadPoolExecutor) executor;
+                    return Math.max(pool.getCorePoolSize(), pool.getPoolSize());
+                };
+                case ForkJoinPool _ -> executor -> {
+                    ClusteredForkJoinPool pool = (ClusteredForkJoinPool) executor;
+                    return Math.max(pool.getParallelism(), pool.getPoolSize());
+                };
+                default ->
+                    throw new IllegalArgumentException(first.getClass() + " is not supported. Must be a ThreadPoolExecutor or ForkJoinPool");
+            };
+        }
+
+        private ToIntBiFunction<ExecutorService, Integer> availableThreadsFunction(ExecutorService first) {
+            return switch (first) {
+                case ThreadPoolExecutor _ -> (executor, poolSize) -> {
+                    ThreadPoolExecutor pool = (ThreadPoolExecutor) executor;
+                    return poolSize - pool.getActiveCount();
+                };
+                case ForkJoinPool _ -> (executor, poolSize) -> {
+                    ClusteredForkJoinPool pool = (ClusteredForkJoinPool) executor;
+                    return poolSize - pool.getActiveThreadCount();
+                };
+                default ->
+                    throw new IllegalArgumentException(first.getClass() + " is not supported. Must be a ThreadPoolExecutor or ForkJoinPool");
+            };
+        }
+
+
+        private boolean meetsServiceLevel(int index) {
+            Duration latencyGoal = serviceLevel.waitThreshold();
+            if (!latencyGoal.isPositive()) {
+                ExecutorService pool = pools.get(index);
+                int poolSize = poolSizeFunction.applyAsInt(pool);
+                int availableThreads = availableThreadsFunction.applyAsInt(pool, poolSize);
+                return availableThreads > 0 || lastWaitTime.get(index).get() < latencyGoal.toNanos();
+            }
+            return true;
+        }
+    }
+
+    interface ProcessorScheduling {
         List<Cluster> availableClusters();
 
         Cluster currentCluster();
@@ -234,7 +653,7 @@ public class ClusteredExecutors {
         protected abstract long lastLevelCacheSize(int cpuId);
     }
 
-    private static final class LinuxProcessorScheduling extends AbstractProcessorScheduling {
+    static final class LinuxProcessorScheduling extends AbstractProcessorScheduling {
         @Override
         public void constrainCurrentThread(Cluster cluster) {
             try (Arena arena = Arena.ofConfined()) {
@@ -385,6 +804,7 @@ public class ClusteredExecutors {
     }
 
     private static final ProcessorScheduling SCHEDULING;
+    private static final AtomicInteger POOL_IDS = new AtomicInteger();
 
     static {
         String osName = System.getProperty("os.name").toLowerCase(Locale.ROOT);
@@ -405,317 +825,6 @@ public class ClusteredExecutors {
             case Error e -> throw e;
             case RuntimeException e -> throw e;
             default -> throw new RuntimeException(t);
-        }
-    }
-
-    /**
-     * Thread factory creating {@link ClusteredThread}s, but otherwise having the same behaviour as
-     * {@link Executors#defaultThreadFactory()}.
-     */
-    private static class ClusteredThreadFactory implements ThreadFactory {
-        private static final AtomicInteger poolNumber = new AtomicInteger(1);
-        private final Cluster cluster;
-        private final ThreadGroup group;
-        private final AtomicInteger threadNumber = new AtomicInteger(1);
-        private final String namePrefix;
-        private final String nameSuffix;
-
-        ClusteredThreadFactory(Cluster cluster) {
-            this.cluster = cluster;
-            group = Thread.currentThread().getThreadGroup();
-            namePrefix = "pool-" +
-                poolNumber.getAndIncrement() +
-                "-thread-";
-            nameSuffix = "-cluster-" + cluster.index;
-        }
-
-        @Override
-        public Thread newThread(Runnable r) {
-            Thread t = new ClusteredThread(group, r, namePrefix + threadNumber.getAndIncrement() + nameSuffix, cluster);
-            if (t.isDaemon())
-                t.setDaemon(false);
-            if (t.getPriority() != Thread.NORM_PRIORITY)
-                t.setPriority(Thread.NORM_PRIORITY);
-            return t;
-        }
-    }
-
-    private static final class ClusteredThread extends Thread {
-        private final Cluster cluster;
-
-        private ClusteredThread(ThreadGroup group, Runnable task, String name, Cluster cluster) {
-            super(group, task, name);
-            this.cluster = cluster;
-        }
-
-        @Override
-        public void run() {
-            SCHEDULING.constrainCurrentThread(cluster);
-            super.run();
-        }
-    }
-
-    private static final class ClusteredForkJoinPoolWorkerThread extends ForkJoinWorkerThread {
-        private final Cluster cluster;
-
-        private ClusteredForkJoinPoolWorkerThread(ForkJoinPool pool, Cluster cluster) {
-            super(pool);
-            this.cluster = cluster;
-        }
-
-        protected void onStart() {
-            super.onStart();
-            SCHEDULING.constrainCurrentThread(cluster);
-            setName(getName() + "-cluster-" + cluster.index);
-        }
-    }
-
-    private record ClusteredExecutor(ExecutorService e,
-                                     DoubleSupplier loadSupplier,
-                                     int[] neighbors) implements ExecutorService {
-
-        private double load() {
-            return loadSupplier.getAsDouble();
-        }
-
-        @Override
-        public void shutdown() {
-            e.shutdown();
-        }
-
-        @Override
-        public List<Runnable> shutdownNow() {
-            return e.shutdownNow();
-        }
-
-        @Override
-        public boolean isShutdown() {
-            return e.isShutdown();
-        }
-
-        @Override
-        public boolean isTerminated() {
-            return e.isTerminated();
-        }
-
-        @Override
-        public boolean awaitTermination(long timeout, TimeUnit unit) throws InterruptedException {
-            return e.awaitTermination(timeout, unit);
-        }
-
-        @Override
-        public <T> Future<T> submit(Callable<T> task) {
-            return e.submit(task);
-        }
-
-        @Override
-        public <T> Future<T> submit(Runnable task, T result) {
-            return e.submit(task, result);
-        }
-
-        @Override
-        public Future<?> submit(Runnable task) {
-            return e.submit(task);
-        }
-
-        @Override
-        public <T> List<Future<T>> invokeAll(Collection<? extends Callable<T>> tasks) throws InterruptedException {
-            return e.invokeAll(tasks);
-        }
-
-        @Override
-        public <T> List<Future<T>> invokeAll(Collection<? extends Callable<T>> tasks, long timeout, TimeUnit unit) throws InterruptedException {
-            return e.invokeAll(tasks, timeout, unit);
-        }
-
-        @Override
-        public <T> T invokeAny(Collection<? extends Callable<T>> tasks) throws InterruptedException, ExecutionException {
-            return e.invokeAny(tasks);
-        }
-
-        @Override
-        public <T> T invokeAny(Collection<? extends Callable<T>> tasks, long timeout, TimeUnit unit) throws InterruptedException, ExecutionException, TimeoutException {
-            return e.invokeAny(tasks, timeout, unit);
-        }
-
-        @Override
-        public void execute(Runnable command) {
-            e.execute(command);
-        }
-    }
-
-    /**
-     * Placement strategies for calls to clustered {@link ExecutorService#execute(Runnable)}.
-     */
-    public enum PlacementStrategy {
-        CURRENT,
-        CHOOSE_TWO,
-        ROUND_ROBIN
-    }
-
-    private static abstract class ClusterPlacementExecutor extends AbstractExecutorService {
-        private final List<ClusteredExecutor> pools;
-
-        private ClusterPlacementExecutor(Function<ThreadFactory, ExecutorService> factory) {
-            this(availableClusters()
-                .stream()
-                .map(ClusteredExecutors::clusteredThreadFactory)
-                .map(factory)
-                .toList());
-        }
-
-        private ClusterPlacementExecutor(BiFunction<Integer, ThreadFactory, ExecutorService> factory) {
-            this(availableClusters()
-                .stream()
-                .map(ClusteredExecutors::clusteredThreadFactory)
-                .map(threadFactory -> {
-                    Cluster cluster = ((ClusteredThreadFactory) threadFactory).cluster;
-                    return factory.apply(cluster.availableProcessors(), threadFactory);
-                })
-                .toList());
-        }
-
-        private ClusterPlacementExecutor(List<ExecutorService> pools) {
-            this.pools = IntStream.range(0, pools.size())
-                .mapToObj(i -> {
-                    ExecutorService executor = pools.get(i);
-                    DoubleSupplier loadSupplier = threadQueueDepth(executor);
-                    int[] neighbors = IntStream.range(0, pools.size())
-                        .filter(j -> j != i)
-                        .toArray();
-                    return new ClusteredExecutor(executor, loadSupplier, neighbors);
-                }).toList();
-        }
-
-        private DoubleSupplier threadQueueDepth(ExecutorService executor) {
-            return switch (executor) {
-                case ThreadPoolExecutor pool -> () -> {
-                    long taskCount = pool.getQueue().size();
-                    return taskCount == 0 ? 0 : (double) taskCount / Math.max(pool.getCorePoolSize(), pool.getPoolSize());
-                };
-                case ForkJoinPool pool -> () -> {
-                    long taskCount = pool.getQueuedSubmissionCount() + pool.getQueuedTaskCount();
-                    return taskCount == 0 ? 0 : (double) taskCount / Math.max(pool.getParallelism(), pool.getPoolSize());
-                };
-                default ->
-                    throw new IllegalArgumentException(executor.getClass() + " is not a supported ExecutorService implementation");
-            };
-        }
-
-        protected abstract ClusteredExecutor choosePool(List<ClusteredExecutor> pools);
-
-        @Override
-        public void execute(Runnable command) {
-            if (pools.size() == 1) {
-                pools.getFirst().execute(command);
-                return;
-            }
-            ClusteredExecutor pool;
-            if (Thread.currentThread() instanceof ClusteredForkJoinPoolWorkerThread t) {
-                pool = pools.get(t.cluster.index);
-            } else {
-                pool = choosePool(pools);
-            }
-            pool.execute(command);
-        }
-
-        @Override
-        public void shutdown() {
-            pools.forEach(ExecutorService::shutdown);
-        }
-
-        @Override
-        public List<Runnable> shutdownNow() {
-            return pools.stream().flatMap(pool -> pool.shutdownNow().stream()).toList();
-        }
-
-        @Override
-        public boolean isShutdown() {
-            return pools.stream().allMatch(ExecutorService::isShutdown);
-        }
-
-        @Override
-        public boolean isTerminated() {
-            return pools.stream().allMatch(ExecutorService::isTerminated);
-        }
-
-        @Override
-        public boolean awaitTermination(long timeout, TimeUnit unit) throws InterruptedException {
-            long current = System.nanoTime();
-            long remaining = unit.toNanos(timeout);
-            for (ExecutorService pool : pools) {
-                if (!pool.awaitTermination(remaining, unit)) {
-                    return false;
-                }
-                long elapsed = current - System.nanoTime();
-                remaining = remaining - elapsed;
-            }
-            return true;
-        }
-
-        @Override
-        public String toString() {
-            return IntStream.range(0, pools.size())
-                .mapToObj(i -> i + ": " + pools.get(i))
-                .collect(Collectors.joining("\n"));
-        }
-    }
-
-    private static final class CurrentClusterExecutor extends ClusterPlacementExecutor {
-        private CurrentClusterExecutor(Function<ThreadFactory, ExecutorService> factory) {
-            super(factory);
-        }
-
-        private CurrentClusterExecutor(BiFunction<Integer, ThreadFactory, ExecutorService> factory) {
-            super(factory);
-        }
-
-        @Override
-        protected ClusteredExecutor choosePool(List<ClusteredExecutor> pools) {
-            Cluster cluster = switch (Thread.currentThread()) {
-                case ClusteredThread t -> t.cluster;
-                case ClusteredForkJoinPoolWorkerThread t -> t.cluster;
-                default -> SCHEDULING.currentCluster();
-            };
-            return pools.get(cluster.index);
-        }
-    }
-
-    private static final class ChooseTwoExecutor extends ClusterPlacementExecutor {
-        private ChooseTwoExecutor(Function<ThreadFactory, ExecutorService> factory) {
-            super(factory);
-        }
-
-        private ChooseTwoExecutor(BiFunction<Integer, ThreadFactory, ExecutorService> factory) {
-            super(factory);
-        }
-
-        @Override
-        protected ClusteredExecutor choosePool(List<ClusteredExecutor> pools) {
-            ThreadLocalRandom random = ThreadLocalRandom.current();
-            int index = random.nextInt(pools.size());
-            ClusteredExecutor pool = pools.get(index);
-            int alternateIndex = pool.neighbors[random.nextInt(pool.neighbors.length)];
-            ClusteredExecutor alternate = pools.get(alternateIndex);
-            return pool.load() < alternate.load() ? pool : alternate;
-        }
-    }
-
-    private static final class RoundRobinExecutor extends ClusterPlacementExecutor {
-        private final AtomicInteger counter = new AtomicInteger();
-
-        private RoundRobinExecutor(Function<ThreadFactory, ExecutorService> factory) {
-            super(factory);
-        }
-
-        private RoundRobinExecutor(BiFunction<Integer, ThreadFactory, ExecutorService> factory) {
-            super(factory);
-        }
-
-        @Override
-        protected ClusteredExecutor choosePool(List<ClusteredExecutor> pools) {
-            int index = counter.accumulateAndGet(1, (i, _) -> ++i >= pools.size() ? 0 : i);
-            return pools.get(index);
         }
     }
 

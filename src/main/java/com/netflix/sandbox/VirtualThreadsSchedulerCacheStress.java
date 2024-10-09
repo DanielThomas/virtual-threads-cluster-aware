@@ -18,7 +18,7 @@ public class VirtualThreadsSchedulerCacheStress {
         @Param({"CHOOSE_TWO", "DEFAULT"})
         public Scheduler scheduler;
 
-        @Param({"1", "10", "100"})
+        @Param({"1"})
         public int multiplier;
 
         public ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
@@ -62,14 +62,13 @@ public class VirtualThreadsSchedulerCacheStress {
 
     @Benchmark
     public List<Integer> submit(BenchmarkState state) throws Exception {
-        List<Integer> result = state.executor.invokeAll(state.tasks).stream().flatMap(future -> {
+        return state.executor.invokeAll(state.tasks).stream().flatMap(future -> {
             try {
                 return future.get().stream();
             } catch (InterruptedException | ExecutionException e) {
                 throw new RuntimeException(e);
             }
         }).toList();
-        return result;
     }
 
     public static void main(String[] args) throws RunnerException {

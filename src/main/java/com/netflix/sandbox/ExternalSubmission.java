@@ -27,7 +27,7 @@ public class ExternalSubmission {
                 executor = Executors.newWorkStealingPool();
                 return;
             }
-            executor = ClusteredExecutors.newClusteredPool(ClusteredExecutors.PlacementStrategy.valueOf(placement), ClusteredExecutors::newWorkStealingPool);
+            executor = ClusteredExecutors.newWorkStealingPool(ClusteredExecutors.PlacementStrategy.valueOf(placement));
         }
     }
 
