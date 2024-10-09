@@ -43,12 +43,19 @@ public class ClusteredExecutors {
     }
 
     /**
-     * A default thread factory that provides affinity to the given {@link Cluster} for created threads.
+     * A thread factory that provides affinity to the given {@link Cluster} for created threads, ...
      *
      * @see Executors#defaultThreadFactory()
      */
     public static ThreadFactory clusteredThreadFactory(Cluster cluster) {
         return new ClusteredThreadFactory(cluster);
+    }
+
+    /**
+     * A fork-join worker thread factory, ...
+     */
+    public static ForkJoinPool.ForkJoinWorkerThreadFactory clusteredForkJoinWorkerThreadFactory(Cluster cluster) {
+        return pool -> new ClusteredForkJoinPoolWorkerThread(pool, cluster);
     }
 
     /**
@@ -83,30 +90,45 @@ public class ClusteredExecutors {
      * @return the resulting executor service
      */
     public static ExecutorService newThreadPool(BiFunction<Integer, ThreadFactory, ExecutorService> factory) {
-        return newThreadPool(PlacementStrategy.CHOOSE_TWO, factory);
+        return newThreadPool(factory, PlacementStrategy.CHOOSE_TWO);
     }
 
     /**
      * Creates a new {@link ExecutorService} backed by an separate executor per processor cluster, using the provided
      * placement strategy to decide how to place tasks on the underlying pools.
      *
+     * @param factory  a factory method to create executors for each cluster, that takes a integer parameter indicating
+     *                 the pool size, and a ThreadFactory for example {@link Executors#newFixedThreadPool(int, ThreadFactory)}
      * @param strategy the placement strategy for determining which underlying pool is selected for execution
-     * @param factory  a factory method to create executors for each cluster, for instance {@link Executors#newFixedThreadPool(int, ThreadFactory)}
      * @return the resulting executor service
      */
-    public static ExecutorService newThreadPool(PlacementStrategy strategy, BiFunction<Integer, ThreadFactory, ExecutorService> factory) {
+    public static ExecutorService newThreadPool(BiFunction<Integer, ThreadFactory, ExecutorService> factory, PlacementStrategy strategy) {
         return new ClusterPlacementExecutor(POOL_IDS.incrementAndGet(), strategy, new ServiceLevel(), factory);
     }
 
     /**
-     * Creates a new {@link ExecutorService} backed by an separate pools per processor cluster, using the provided
-     * placement strategy to decide how to place tasks on the underlying threads.
+     * Creates a new {@link ExecutorService} backed by an separate executor per processor cluster, using the
+     * {@link PlacementStrategy#CHOOSE_TWO} placement strategy.
      *
+     * @param factory  a factory method to create executors for each cluster, that takes a integer parameter indicating
+     *                 the pool size, and a ThreadFactory for example {@link Executors#newFixedThreadPool(int, ThreadFactory)}
      * @param strategy the placement strategy for determining which underlying pool is selected for execution
-     * @param factory  a factory method to create executors for each cluster, for instance {@link Executors#newFixedThreadPool(int, ThreadFactory)}
      * @return the resulting executor service
      */
-    public static ExecutorService newThreadPoolWithoutSize(PlacementStrategy strategy, Function<ThreadFactory, ExecutorService> factory) {
+    public static ExecutorService newThreadPoolWithoutSize(Function<ThreadFactory, ExecutorService> factory) {
+        return newThreadPoolWithoutSize(factory, PlacementStrategy.CHOOSE_TWO);
+    }
+
+    /**
+     * Creates a new {@link ExecutorService} backed by an separate executor per processor cluster, using the provided
+     * placement strategy to decide how to place tasks on the underlying pools.
+     *
+     * @param factory  a factory method to create executors for each cluster, that takes a integer parameter indicating
+     *                 the pool size, and a ThreadFactory for example {@link Executors#newFixedThreadPool(int, ThreadFactory)}
+     * @param strategy the placement strategy for determining which underlying pool is selected for execution
+     * @return the resulting executor service
+     */
+    public static ExecutorService newThreadPoolWithoutSize(Function<ThreadFactory, ExecutorService> factory, PlacementStrategy strategy) {
         return new ClusterPlacementExecutor(POOL_IDS.incrementAndGet(), strategy, new ServiceLevel(), factory);
     }
 
@@ -230,6 +252,10 @@ public class ClusteredExecutors {
         private final Cluster cluster;
         private final int clusteredPoolId;
 
+        private ClusteredForkJoinPoolWorkerThread(ForkJoinPool pool, Cluster cluster) {
+            this(pool, cluster, -1);
+        }
+
         private ClusteredForkJoinPoolWorkerThread(ForkJoinPool pool, Cluster cluster, int clusteredPoolId) {
             super(pool);
             this.cluster = cluster;
@@ -288,6 +314,9 @@ public class ClusteredExecutors {
 
     /**
      * TODO
+     *
+     * @param waitThreshold      ...
+     * @param rebalanceThreshold ...
      */
     public record ServiceLevel(Duration waitThreshold,
                                Duration rebalanceThreshold) {
@@ -430,14 +459,14 @@ public class ClusteredExecutors {
                 OptionalInt poolId = t.clusteredPoolId();
                 if (poolId.isPresent() && this.poolId == poolId.getAsInt()) {
                     int current = t.cluster().index;
-                    if (meetsServiceLevel(current)) {
+                    if (meetsWaitTimeServiceLevel(current)) {
                         index = current;
                     }
                 }
             }
             if (index < 0) {
                 int[] candidates = IntStream.of(poolIndexes)
-                    .filter(this::meetsServiceLevel)
+                    .filter(this::meetsWaitTimeServiceLevel)
                     .toArray();
                 if (candidates.length == 1) {
                     index = candidates[0];
@@ -554,8 +583,7 @@ public class ClusteredExecutors {
             };
         }
 
-
-        private boolean meetsServiceLevel(int index) {
+        private boolean meetsWaitTimeServiceLevel(int index) {
             Duration latencyGoal = serviceLevel.waitThreshold();
             if (!latencyGoal.isPositive()) {
                 ExecutorService pool = pools.get(index);
@@ -635,8 +663,7 @@ public class ClusteredExecutors {
         @Override
         public final Cluster currentCluster() {
             return switch (Thread.currentThread()) {
-                case ClusteredThread t -> t.cluster;
-                case ClusteredForkJoinPoolWorkerThread t -> t.cluster;
+                case Clustered t -> t.cluster();
                 default -> {
                     int cpuId = currentProcessor();
                     yield clusterByProcessor.get(cpuId);

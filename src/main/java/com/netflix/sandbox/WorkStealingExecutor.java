@@ -5,10 +5,10 @@ import java.util.concurrent.ExecutorService;
 
 import static com.netflix.sandbox.ClusteredExecutors.PlacementStrategy.CHOOSE_TWO;
 
-public class ChooseTwoExecutor implements Executor {
+public class WorkStealingExecutor implements Executor {
     private final ExecutorService pool;
-    
-    public ChooseTwoExecutor() {
+
+    public WorkStealingExecutor() {
         pool = ClusteredExecutors.newWorkStealingPool();
     }
 

@@ -15,7 +15,7 @@ public class VirtualThreadsSchedulerCacheStress {
 
     @State(Scope.Benchmark)
     public static class BenchmarkState {
-        @Param({"CHOOSE_TWO", "DEFAULT"})
+        @Param({"WORK_STEALING", "DEFAULT"})
         public Scheduler scheduler;
 
         @Param({"1"})
@@ -30,7 +30,7 @@ public class VirtualThreadsSchedulerCacheStress {
         @Setup(Level.Trial)
         public void setupExecutor() {
             Class<? extends Executor> implClass = switch (scheduler) {
-                case CHOOSE_TWO -> ChooseTwoExecutor.class;
+                case WORK_STEALING -> WorkStealingExecutor.class;
                 case DEFAULT -> null;
                 default -> throw new IllegalArgumentException("missing implClass condition for " + scheduler);
             };
@@ -84,7 +84,7 @@ public class VirtualThreadsSchedulerCacheStress {
 
     public enum Scheduler {
         DEFAULT,
-        CHOOSE_TWO
+        WORK_STEALING
     }
 
 }
