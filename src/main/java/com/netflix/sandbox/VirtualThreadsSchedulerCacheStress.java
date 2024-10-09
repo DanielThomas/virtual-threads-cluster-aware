@@ -18,7 +18,7 @@ public class VirtualThreadsSchedulerCacheStress {
         @Param({"WORK_STEALING", "DEFAULT"})
         public Scheduler scheduler;
 
-        @Param({"1"})
+        @Param({"10"})
         public int multiplier;
 
         public ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();

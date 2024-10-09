@@ -1,5 +1,7 @@
 package com.netflix.sandbox;
 
+import com.netflix.sandbox.ClusteredExecutors.Placement;
+import com.netflix.sandbox.ClusteredExecutors.Strategy;
 import org.openjdk.jmh.annotations.*;
 import org.openjdk.jmh.runner.Runner;
 import org.openjdk.jmh.runner.RunnerException;
@@ -27,7 +29,7 @@ public class ExternalSubmission {
                 executor = Executors.newWorkStealingPool();
                 return;
             }
-            executor = ClusteredExecutors.newWorkStealingPool(ClusteredExecutors.PlacementStrategy.valueOf(placement));
+            executor = ClusteredExecutors.newWorkStealingPool(Strategy.withPlacement(Placement.valueOf(placement)));
         }
     }
 

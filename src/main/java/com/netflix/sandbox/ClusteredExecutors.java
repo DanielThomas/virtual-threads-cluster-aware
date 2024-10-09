@@ -43,16 +43,14 @@ public class ClusteredExecutors {
     }
 
     /**
-     * A thread factory that provides affinity to the given {@link Cluster} for created threads, ...
-     *
-     * @see Executors#defaultThreadFactory()
+     * A thread factory that provides affinity to the given {@link Cluster} for created threads.
      */
     public static ThreadFactory clusteredThreadFactory(Cluster cluster) {
         return new ClusteredThreadFactory(cluster);
     }
 
     /**
-     * A fork-join worker thread factory, ...
+     * A fork-join worker thread factory that provides affinity to the given {@link Cluster} for created threads.
      */
     public static ForkJoinPool.ForkJoinWorkerThreadFactory clusteredForkJoinWorkerThreadFactory(Cluster cluster) {
         return pool -> new ClusteredForkJoinPoolWorkerThread(pool, cluster);
@@ -62,35 +60,28 @@ public class ClusteredExecutors {
      * Creates a work-stealing thread pool...
      */
     public static ExecutorService newWorkStealingPool() {
-        return newWorkStealingPool(PlacementStrategy.CHOOSE_TWO);
+        return newWorkStealingPool(Strategy.defaultStrategy());
     }
 
     /**
      * Creates a work-stealing thread pool...
      */
-    public static ExecutorService newWorkStealingPool(PlacementStrategy strategy) {
-        return newWorkStealingPool(strategy, new ServiceLevel());
-    }
-
-    /**
-     * Creates a work-stealing thread pool...
-     */
-    public static ExecutorService newWorkStealingPool(PlacementStrategy strategy, ServiceLevel serviceLevel) {
+    public static ExecutorService newWorkStealingPool(Strategy strategy) {
         int clusteredPoolId = POOL_IDS.incrementAndGet();
         BiFunction<Integer, ThreadFactory, ExecutorService> factory = (parallelism, threadFactory) ->
-            new ClusteredForkJoinPool(parallelism, ((ClusteredThreadFactory) threadFactory).cluster, clusteredPoolId);
-        return new ClusterPlacementExecutor(clusteredPoolId, strategy, serviceLevel, factory);
+            new ClusteredWorkStealingPool(parallelism, ((ClusteredThreadFactory) threadFactory).cluster, clusteredPoolId);
+        return new ClusterPlacementExecutor(clusteredPoolId, strategy, factory);
     }
 
     /**
-     * Creates a new {@link ExecutorService} backed by an separate executor per processor cluster, using the
-     * {@link PlacementStrategy#CHOOSE_TWO} placement strategy.
+     * Creates a new {@link ExecutorService} backed by an separate executor per processor cluster, using
+     * {@link Strategy#defaultStrategy()}.
      *
      * @param factory a factory method to create executors for each cluster, for instance {@link Executors#newFixedThreadPool(int, ThreadFactory)}
      * @return the resulting executor service
      */
     public static ExecutorService newThreadPool(BiFunction<Integer, ThreadFactory, ExecutorService> factory) {
-        return newThreadPool(factory, PlacementStrategy.CHOOSE_TWO);
+        return newThreadPool(factory, Strategy.defaultStrategy());
     }
 
     /**
@@ -102,21 +93,20 @@ public class ClusteredExecutors {
      * @param strategy the placement strategy for determining which underlying pool is selected for execution
      * @return the resulting executor service
      */
-    public static ExecutorService newThreadPool(BiFunction<Integer, ThreadFactory, ExecutorService> factory, PlacementStrategy strategy) {
-        return new ClusterPlacementExecutor(POOL_IDS.incrementAndGet(), strategy, new ServiceLevel(), factory);
+    public static ExecutorService newThreadPool(BiFunction<Integer, ThreadFactory, ExecutorService> factory, Strategy strategy) {
+        return new ClusterPlacementExecutor(POOL_IDS.incrementAndGet(), strategy, factory);
     }
 
     /**
      * Creates a new {@link ExecutorService} backed by an separate executor per processor cluster, using the
-     * {@link PlacementStrategy#CHOOSE_TWO} placement strategy.
+     * {@link Placement#CHOOSE_TWO} placement strategy.
      *
-     * @param factory  a factory method to create executors for each cluster, that takes a integer parameter indicating
-     *                 the pool size, and a ThreadFactory for example {@link Executors#newFixedThreadPool(int, ThreadFactory)}
-     * @param strategy the placement strategy for determining which underlying pool is selected for execution
+     * @param factory a factory method to create executors for each cluster, that takes a integer parameter indicating
+     *                the pool size, and a ThreadFactory for example {@link Executors#newFixedThreadPool(int, ThreadFactory)}
      * @return the resulting executor service
      */
     public static ExecutorService newThreadPoolWithoutSize(Function<ThreadFactory, ExecutorService> factory) {
-        return newThreadPoolWithoutSize(factory, PlacementStrategy.CHOOSE_TWO);
+        return newThreadPoolWithoutSize(factory, Strategy.defaultStrategy());
     }
 
     /**
@@ -128,8 +118,8 @@ public class ClusteredExecutors {
      * @param strategy the placement strategy for determining which underlying pool is selected for execution
      * @return the resulting executor service
      */
-    public static ExecutorService newThreadPoolWithoutSize(Function<ThreadFactory, ExecutorService> factory, PlacementStrategy strategy) {
-        return new ClusterPlacementExecutor(POOL_IDS.incrementAndGet(), strategy, new ServiceLevel(), factory);
+    public static ExecutorService newThreadPoolWithoutSize(Function<ThreadFactory, ExecutorService> factory, Strategy strategy) {
+        return new ClusterPlacementExecutor(POOL_IDS.incrementAndGet(), strategy, factory);
     }
 
     /**
@@ -175,9 +165,18 @@ public class ClusteredExecutors {
         }
     }
 
+    /**
+     * TODO
+     */
     private interface Clustered {
+        /**
+         * TODO
+         */
         Cluster cluster();
 
+        /**
+         * TODO
+         */
         OptionalInt clusteredPoolId();
     }
 
@@ -282,53 +281,46 @@ public class ClusteredExecutors {
         }
     }
 
-    private static final class ClusteredForkJoinPool extends ForkJoinPool implements Clustered {
-        private final Cluster cluster;
-        private final int clusteredPoolId;
-
-        private ClusteredForkJoinPool(int parallelism, Cluster cluster, int clusteredPoolId) {
+    private static final class ClusteredWorkStealingPool extends ForkJoinPool {
+        private ClusteredWorkStealingPool(int parallelism, Cluster cluster, int clusteredPoolId) {
             super(parallelism,
                 pool -> new ClusteredForkJoinPoolWorkerThread(pool, cluster, clusteredPoolId),
                 null, true);
-            this.cluster = cluster;
-            this.clusteredPoolId = clusteredPoolId;
-        }
-
-        public void execute(Runnable task) {
-            externalSubmit(ForkJoinTask.adapt(task));
-        }
-
-        @Override
-        public Cluster cluster() {
-            return cluster;
-        }
-
-        @Override
-        public OptionalInt clusteredPoolId() {
-            if (clusteredPoolId <= 0) {
-                return OptionalInt.empty();
-            }
-            return OptionalInt.of(clusteredPoolId);
         }
     }
 
     /**
      * TODO
      *
+     * @param placement          ...
      * @param waitThreshold      ...
      * @param rebalanceThreshold ...
      */
-    public record ServiceLevel(Duration waitThreshold,
-                               Duration rebalanceThreshold) {
-        public ServiceLevel() {
-            this(Duration.ZERO, Duration.ZERO);
+    public record Strategy(Placement placement,
+                           Duration waitThreshold,
+                           Duration rebalanceThreshold) {
+        /**
+         *
+         */
+        public static Strategy defaultStrategy() {
+            return withPlacement(Placement.CHOOSE_TWO);
         }
+
+        public static Strategy withPlacement(Placement placement) {
+            return new Strategy(placement, Duration.ZERO, Duration.ZERO);
+        }
+    }
+
+    private interface ClusterPlacement {
+        int choose(int[] candidateClusters,
+                   IntToDoubleFunction loadFunction,
+                   ConcurrentMap<String, Object> state);
     }
 
     /**
      * TODO
      */
-    public enum PlacementStrategy implements ClusterPlacement {
+    public enum Placement implements ClusterPlacement {
         /**
          * TODO
          */
@@ -388,29 +380,22 @@ public class ClusteredExecutors {
         }
     }
 
-    private interface ClusterPlacement {
-        int choose(int[] candidateClusters,
-                   IntToDoubleFunction loadFunction,
-                   ConcurrentMap<String, Object> state);
-    }
-
     private static final class ClusterPlacementExecutor extends AbstractExecutorService {
         private final int poolId;
-        private final PlacementStrategy strategy;
-        private final ServiceLevel serviceLevel;
         private final List<ExecutorService> pools;
+        private final Strategy strategy;
         private final int[] poolIndexes;
-        private final ConcurrentMap<String, Object> strategyState;
+        private final ConcurrentMap<String, Object> placementState;
         private final List<AtomicLong> lastWaitTime;
         private final ToLongFunction<ExecutorService> queuedTasksFunction;
         private final ToIntFunction<ExecutorService> poolSizeFunction;
         private final ToIntBiFunction<ExecutorService, Integer> availableThreadsFunction;
+        private final IntToDoubleFunction poolLoadFunction;
 
         private ClusterPlacementExecutor(int poolId,
-                                         PlacementStrategy strategy,
-                                         ServiceLevel serviceLevel,
+                                         Strategy strategy,
                                          Function<ThreadFactory, ExecutorService> factory) {
-            this(poolId, strategy, serviceLevel, availableClusters()
+            this(poolId, strategy, availableClusters()
                 .stream()
                 .map(cluster -> new ClusteredThreadFactory(cluster, poolId))
                 .map(factory)
@@ -418,10 +403,9 @@ public class ClusteredExecutors {
         }
 
         private ClusterPlacementExecutor(int poolId,
-                                         PlacementStrategy strategy,
-                                         ServiceLevel serviceLevel,
+                                         Strategy strategy,
                                          BiFunction<Integer, ThreadFactory, ExecutorService> factory) {
-            this(poolId, strategy, serviceLevel, availableClusters()
+            this(poolId, strategy, availableClusters()
                 .stream()
                 .map(cluster -> new ClusteredThreadFactory(cluster, poolId))
                 .map(threadFactory -> {
@@ -432,20 +416,23 @@ public class ClusteredExecutors {
         }
 
         private ClusterPlacementExecutor(int poolId,
-                                         PlacementStrategy strategy,
-                                         ServiceLevel serviceLevel,
+                                         Strategy strategy,
                                          List<ExecutorService> pools) {
             this.poolId = poolId;
             this.strategy = Objects.requireNonNull(strategy);
-            this.serviceLevel = Objects.requireNonNull(serviceLevel);
             this.pools = Objects.requireNonNull(pools);
             this.poolIndexes = IntStream.range(0, pools.size()).toArray();
-            this.strategyState = new ConcurrentHashMap<>();
+            this.placementState = new ConcurrentHashMap<>();
             this.lastWaitTime = pools.stream().map(_ -> new AtomicLong()).toList();
             ExecutorService first = pools.stream().findFirst().get();
             this.queuedTasksFunction = queuedTasksFunction(first);
             this.poolSizeFunction = poolSizeFunction(first);
             this.availableThreadsFunction = availableThreadsFunction(first);
+            this.poolLoadFunction = index -> {
+                ExecutorService pool = pools.get(index);
+                int poolSize = poolSizeFunction.applyAsInt(pool);
+                return (double) queuedTasksFunction.applyAsLong(pool) / poolSize;
+            };
         }
 
         @Override
@@ -474,15 +461,12 @@ public class ClusteredExecutors {
                     if (candidates.length == 0) {
                         candidates = poolIndexes;
                     }
-                    index = strategy.choose(candidates, i -> {
-                        ExecutorService pool = pools.get(i);
-                        int poolSize = poolSizeFunction.applyAsInt(pool);
-                        return (double) queuedTasksFunction.applyAsLong(pool) / poolSize;
-                    }, strategyState);
+                    Placement placement = strategy.placement();
+                    index = placement.choose(candidates, poolLoadFunction, placementState);
                 }
             }
             Runnable task = command;
-            if (!serviceLevel.waitThreshold().isPositive()) {
+            if (strategy.waitThreshold().isPositive()) {
                 AtomicLong lastWaitTime = this.lastWaitTime.get(index);
                 long arrivalTime = System.nanoTime();
                 task = () -> {
@@ -540,12 +524,12 @@ public class ClusteredExecutors {
                     ThreadPoolExecutor pool = (ThreadPoolExecutor) executor;
                     return pool.getQueue().size();
                 };
-                case ClusteredForkJoinPool _ -> executor -> {
-                    ClusteredForkJoinPool pool = (ClusteredForkJoinPool) executor;
+                case ClusteredWorkStealingPool _ -> executor -> {
+                    ClusteredWorkStealingPool pool = (ClusteredWorkStealingPool) executor;
                     return pool.getQueuedSubmissionCount();
                 };
                 case ForkJoinPool _ -> executor -> {
-                    ClusteredForkJoinPool pool = (ClusteredForkJoinPool) executor;
+                    ClusteredWorkStealingPool pool = (ClusteredWorkStealingPool) executor;
                     return pool.getQueuedSubmissionCount() + pool.getQueuedTaskCount();
                 };
                 default ->
@@ -560,7 +544,7 @@ public class ClusteredExecutors {
                     return Math.max(pool.getCorePoolSize(), pool.getPoolSize());
                 };
                 case ForkJoinPool _ -> executor -> {
-                    ClusteredForkJoinPool pool = (ClusteredForkJoinPool) executor;
+                    ClusteredWorkStealingPool pool = (ClusteredWorkStealingPool) executor;
                     return Math.max(pool.getParallelism(), pool.getPoolSize());
                 };
                 default ->
@@ -575,7 +559,7 @@ public class ClusteredExecutors {
                     return poolSize - pool.getActiveCount();
                 };
                 case ForkJoinPool _ -> (executor, poolSize) -> {
-                    ClusteredForkJoinPool pool = (ClusteredForkJoinPool) executor;
+                    ClusteredWorkStealingPool pool = (ClusteredWorkStealingPool) executor;
                     return poolSize - pool.getActiveThreadCount();
                 };
                 default ->
@@ -584,8 +568,8 @@ public class ClusteredExecutors {
         }
 
         private boolean meetsWaitTimeServiceLevel(int index) {
-            Duration latencyGoal = serviceLevel.waitThreshold();
-            if (!latencyGoal.isPositive()) {
+            Duration latencyGoal = strategy.waitThreshold();
+            if (latencyGoal.isPositive()) {
                 ExecutorService pool = pools.get(index);
                 int poolSize = poolSizeFunction.applyAsInt(pool);
                 int availableThreads = availableThreadsFunction.applyAsInt(pool, poolSize);
@@ -595,7 +579,10 @@ public class ClusteredExecutors {
         }
     }
 
-    interface ProcessorScheduling {
+    /**
+     * TODO
+     */
+    interface ClusterScheduling {
         List<Cluster> availableClusters();
 
         Cluster currentCluster();
@@ -603,7 +590,7 @@ public class ClusteredExecutors {
         void constrainCurrentThread(Cluster cluster);
     }
 
-    private static final class UnsupportedProcessorScheduling implements ProcessorScheduling {
+    private static final class UnsupportedClusterScheduling implements ClusterScheduling {
         private final Cluster ZERO = new Cluster(0, new BitSet(0), -1);
 
         @Override
@@ -622,11 +609,11 @@ public class ClusteredExecutors {
         }
     }
 
-    private static abstract class AbstractProcessorScheduling implements ProcessorScheduling {
+    private static abstract class AbstractClusterScheduling implements ClusterScheduling {
         private final List<Cluster> availableClusters;
         private final List<Cluster> clusterByProcessor;
 
-        protected AbstractProcessorScheduling() {
+        protected AbstractClusterScheduling() {
             Thread t = Thread.currentThread();
             if (t instanceof ClusteredThread || t instanceof ClusteredForkJoinPoolWorkerThread) {
                 throw new IllegalStateException("Should not be called from clustered threads");
@@ -680,7 +667,7 @@ public class ClusteredExecutors {
         protected abstract long lastLevelCacheSize(int cpuId);
     }
 
-    static final class LinuxProcessorScheduling extends AbstractProcessorScheduling {
+    static final class LinuxClusterScheduling extends AbstractClusterScheduling {
         @Override
         public void constrainCurrentThread(Cluster cluster) {
             try (Arena arena = Arena.ofConfined()) {
@@ -830,19 +817,19 @@ public class ClusteredExecutors {
         }
     }
 
-    private static final ProcessorScheduling SCHEDULING;
+    private static final ClusterScheduling SCHEDULING;
     private static final AtomicInteger POOL_IDS = new AtomicInteger();
 
     static {
         String osName = System.getProperty("os.name").toLowerCase(Locale.ROOT);
         if (osName.contains("linux")) {
-            SCHEDULING = new LinuxProcessorScheduling();
+            SCHEDULING = new LinuxClusterScheduling();
         } else {
             // When implementing other platforms, refer to:
             // https://developer.apple.com/library/archive/releasenotes/Performance/RN-AffinityAPI/index.html
             // https://github.com/kimwalisch/primesieve/blob/bf8e09f5c7e1b26a9fd441a777098da55e3fb8c7/src/CpuInfo.cpp#L769
             // https://github.com/Genivia/ugrep/blob/13fa0774dfb3d9b6176fe75bac34b55a4674a268/src/ugrep.cpp#L533
-            SCHEDULING = new UnsupportedProcessorScheduling();
+            SCHEDULING = new UnsupportedClusterScheduling();
             System.err.println("WARNING: ClusteredExecutor does not support this platform and will fall-back to all processors allowed");
         }
     }
