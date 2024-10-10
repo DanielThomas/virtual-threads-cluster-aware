@@ -69,7 +69,7 @@ public class ClusteredExecutors {
     public static ExecutorService newWorkStealingPool(Strategy strategy) {
         int clusteredPoolId = POOL_IDS.incrementAndGet();
         BiFunction<Integer, ThreadFactory, ExecutorService> factory = (parallelism, threadFactory) ->
-            new ClusteredWorkStealingPool(parallelism, ((ClusteredThreadFactory) threadFactory).cluster, clusteredPoolId);
+                new ClusteredWorkStealingPool(parallelism, ((ClusteredThreadFactory) threadFactory).cluster, clusteredPoolId);
         return new ClusterPlacementExecutor(clusteredPoolId, strategy, factory);
     }
 
@@ -85,8 +85,8 @@ public class ClusteredExecutors {
     }
 
     /**
-     * Creates a new {@link ExecutorService} backed by an separate executor per processor cluster, using the provided
-     * placement strategy to decide how to place tasks on the underlying pools.
+     * Creates a new {@link ExecutorService} backed by an separate executor per processor cluster, using the strategy
+     * to decide how to place tasks on the underlying pools.
      *
      * @param factory  a factory method to create executors for each cluster, that takes a integer parameter indicating
      *                 the pool size, and a ThreadFactory for example {@link Executors#newFixedThreadPool(int, ThreadFactory)}
@@ -201,8 +201,8 @@ public class ClusteredExecutors {
             this.clusteredPoolId = clusteredPoolId;
             group = Thread.currentThread().getThreadGroup();
             namePrefix = "pool-" +
-                poolNumber.getAndIncrement() +
-                "-thread-";
+                    poolNumber.getAndIncrement() +
+                    "-thread-";
             nameSuffix = "-cluster-" + cluster.index;
         }
 
@@ -284,30 +284,26 @@ public class ClusteredExecutors {
     private static final class ClusteredWorkStealingPool extends ForkJoinPool {
         private ClusteredWorkStealingPool(int parallelism, Cluster cluster, int clusteredPoolId) {
             super(parallelism,
-                pool -> new ClusteredForkJoinPoolWorkerThread(pool, cluster, clusteredPoolId),
-                null, true);
+                    pool -> new ClusteredForkJoinPoolWorkerThread(pool, cluster, clusteredPoolId),
+                    null, true);
         }
     }
 
     /**
      * TODO
      *
-     * @param placement          ...
-     * @param waitThreshold      ...
+     * @param placement          the placement strategy for submissions
+     * @param loadThreshold      the load threshold over which locally submitted tasks will fall back to the placement
      * @param rebalanceThreshold ...
      */
     public record Strategy(Placement placement,
-                           Duration waitThreshold,
+                           double loadThreshold,
                            Duration rebalanceThreshold) {
         /**
-         *
+         * Return a default strategy.
          */
         public static Strategy defaultStrategy() {
-            return withPlacement(Placement.CHOOSE_TWO);
-        }
-
-        public static Strategy withPlacement(Placement placement) {
-            return new Strategy(placement, Duration.ZERO, Duration.ZERO);
+            return new Strategy(Placement.CHOOSE_TWO, 3.0, Duration.ZERO);
         }
     }
 
@@ -329,6 +325,7 @@ public class ClusteredExecutors {
             public int choose(int[] candidateIndexes,
                               IntToDoubleFunction loadFunction,
                               ConcurrentMap<String, Object> state) {
+                // FIXME need an escape hatch when load threshold is reached
                 return candidateIndexes[0];
             }
         },
@@ -359,8 +356,8 @@ public class ClusteredExecutors {
                 ThreadLocalRandom random = ThreadLocalRandom.current();
                 int index = random.nextInt(candidateIndexes.length);
                 int[] neighbors = IntStream.of(candidateIndexes)
-                    .filter(i -> i != index)
-                    .toArray();
+                        .filter(i -> i != index)
+                        .toArray();
                 int alternate = neighbors[random.nextInt(neighbors.length)];
                 return loadFunction.applyAsDouble(index) < loadFunction.applyAsDouble(alternate) ? index : alternate;
             }
@@ -386,33 +383,33 @@ public class ClusteredExecutors {
         private final Strategy strategy;
         private final int[] poolIndexes;
         private final ConcurrentMap<String, Object> placementState;
-        private final List<AtomicLong> lastWaitTime;
-        private final ToLongFunction<ExecutorService> queuedTasksFunction;
-        private final ToIntFunction<ExecutorService> poolSizeFunction;
-        private final ToIntBiFunction<ExecutorService, Integer> availableThreadsFunction;
+        private final List<AtomicLong> lastTaskRun;
+        private final IntToLongFunction queuedTasksFunction;
+        private final IntUnaryOperator poolSizeFunction;
+        private final IntBinaryOperator availableThreadsFunction;
         private final IntToDoubleFunction poolLoadFunction;
 
         private ClusterPlacementExecutor(int poolId,
                                          Strategy strategy,
                                          Function<ThreadFactory, ExecutorService> factory) {
             this(poolId, strategy, availableClusters()
-                .stream()
-                .map(cluster -> new ClusteredThreadFactory(cluster, poolId))
-                .map(factory)
-                .toList());
+                    .stream()
+                    .map(cluster -> new ClusteredThreadFactory(cluster, poolId))
+                    .map(factory)
+                    .toList());
         }
 
         private ClusterPlacementExecutor(int poolId,
                                          Strategy strategy,
                                          BiFunction<Integer, ThreadFactory, ExecutorService> factory) {
             this(poolId, strategy, availableClusters()
-                .stream()
-                .map(cluster -> new ClusteredThreadFactory(cluster, poolId))
-                .map(threadFactory -> {
-                    Cluster cluster = threadFactory.cluster;
-                    return factory.apply(cluster.availableProcessors(), threadFactory);
-                })
-                .toList());
+                    .stream()
+                    .map(cluster -> new ClusteredThreadFactory(cluster, poolId))
+                    .map(threadFactory -> {
+                        Cluster cluster = threadFactory.cluster;
+                        return factory.apply(cluster.availableProcessors(), threadFactory);
+                    })
+                    .toList());
         }
 
         private ClusterPlacementExecutor(int poolId,
@@ -423,15 +420,14 @@ public class ClusteredExecutors {
             this.pools = Objects.requireNonNull(pools);
             this.poolIndexes = IntStream.range(0, pools.size()).toArray();
             this.placementState = new ConcurrentHashMap<>();
-            this.lastWaitTime = pools.stream().map(_ -> new AtomicLong()).toList();
+            this.lastTaskRun = pools.stream().map(_ -> new AtomicLong()).toList();
             ExecutorService first = pools.stream().findFirst().get();
             this.queuedTasksFunction = queuedTasksFunction(first);
             this.poolSizeFunction = poolSizeFunction(first);
             this.availableThreadsFunction = availableThreadsFunction(first);
             this.poolLoadFunction = index -> {
-                ExecutorService pool = pools.get(index);
-                int poolSize = poolSizeFunction.applyAsInt(pool);
-                return (double) queuedTasksFunction.applyAsLong(pool) / poolSize;
+                int poolSize = poolSizeFunction.applyAsInt(index);
+                return (double) queuedTasksFunction.applyAsLong(index) / poolSize;
             };
         }
 
@@ -446,15 +442,15 @@ public class ClusteredExecutors {
                 OptionalInt poolId = t.clusteredPoolId();
                 if (poolId.isPresent() && this.poolId == poolId.getAsInt()) {
                     int current = t.cluster().index;
-                    if (meetsWaitTimeServiceLevel(current)) {
+                    if (belowLoadThreshold(current)) {
                         index = current;
                     }
                 }
             }
             if (index < 0) {
                 int[] candidates = IntStream.of(poolIndexes)
-                    .filter(this::meetsWaitTimeServiceLevel)
-                    .toArray();
+                        .filter(this::belowLoadThreshold)
+                        .toArray();
                 if (candidates.length == 1) {
                     index = candidates[0];
                 } else {
@@ -465,15 +461,11 @@ public class ClusteredExecutors {
                     index = placement.choose(candidates, poolLoadFunction, placementState);
                 }
             }
-            Runnable task = command;
-            if (strategy.waitThreshold().isPositive()) {
-                AtomicLong lastWaitTime = this.lastWaitTime.get(index);
-                long arrivalTime = System.nanoTime();
-                task = () -> {
-                    lastWaitTime.set(System.nanoTime() - arrivalTime);
-                    command.run();
-                };
-            }
+            AtomicLong taskLastRun = this.lastTaskRun.get(index);
+            Runnable task = () -> {
+                taskLastRun.set(System.nanoTime());
+                command.run();
+            };
             pools.get(index).execute(task);
         }
 
@@ -514,64 +506,57 @@ public class ClusteredExecutors {
         @Override
         public String toString() {
             return IntStream.range(0, pools.size())
-                .mapToObj(i -> i + ": " + pools.get(i))
-                .collect(Collectors.joining("\n"));
+                    .mapToObj(i -> i + ": " + pools.get(i) + ", load = " + poolLoadFunction.applyAsDouble(i))
+                    .collect(Collectors.joining("\n"));
         }
 
-        private ToLongFunction<ExecutorService> queuedTasksFunction(ExecutorService first) {
+        private IntToLongFunction queuedTasksFunction(ExecutorService first) {
             return switch (first) {
-                case ThreadPoolExecutor _ -> executor -> {
-                    ThreadPoolExecutor pool = (ThreadPoolExecutor) executor;
+                case ThreadPoolExecutor _ -> i -> {
+                    ThreadPoolExecutor pool = (ThreadPoolExecutor) pools.get(i);
                     return pool.getQueue().size();
                 };
-                case ForkJoinPool _ -> executor -> {
-                    ForkJoinPool pool = (ForkJoinPool) executor;
+                case ForkJoinPool _ -> i -> {
+                    ForkJoinPool pool = (ForkJoinPool) pools.get(i);
                     return pool.getQueuedSubmissionCount() + pool.getQueuedTaskCount();
                 };
                 default ->
-                    throw new IllegalArgumentException(first.getClass() + " is not supported. Must be a ThreadPoolExecutor or ForkJoinPool");
+                        throw new IllegalArgumentException(first.getClass() + " is not supported. Must be a ThreadPoolExecutor or ForkJoinPool");
             };
         }
 
-        private ToIntFunction<ExecutorService> poolSizeFunction(ExecutorService first) {
+        private IntUnaryOperator poolSizeFunction(ExecutorService first) {
             return switch (first) {
-                case ThreadPoolExecutor _ -> executor -> {
-                    ThreadPoolExecutor pool = (ThreadPoolExecutor) executor;
+                case ThreadPoolExecutor _ -> i -> {
+                    ThreadPoolExecutor pool = (ThreadPoolExecutor) pools.get(i);
                     return Math.max(pool.getCorePoolSize(), pool.getPoolSize());
                 };
-                case ForkJoinPool _ -> executor -> {
-                    ClusteredWorkStealingPool pool = (ClusteredWorkStealingPool) executor;
+                case ForkJoinPool _ -> i -> {
+                    ForkJoinPool pool = (ForkJoinPool) pools.get(i);
                     return Math.max(pool.getParallelism(), pool.getPoolSize());
                 };
                 default ->
-                    throw new IllegalArgumentException(first.getClass() + " is not supported. Must be a ThreadPoolExecutor or ForkJoinPool");
+                        throw new IllegalArgumentException(first.getClass() + " is not supported. Must be a ThreadPoolExecutor or ForkJoinPool");
             };
         }
 
-        private ToIntBiFunction<ExecutorService, Integer> availableThreadsFunction(ExecutorService first) {
+        private IntBinaryOperator availableThreadsFunction(ExecutorService first) {
             return switch (first) {
-                case ThreadPoolExecutor _ -> (executor, poolSize) -> {
-                    ThreadPoolExecutor pool = (ThreadPoolExecutor) executor;
+                case ThreadPoolExecutor _ -> (i, poolSize) -> {
+                    ThreadPoolExecutor pool = (ThreadPoolExecutor) pools.get(i);
                     return poolSize - pool.getActiveCount();
                 };
-                case ForkJoinPool _ -> (executor, poolSize) -> {
-                    ClusteredWorkStealingPool pool = (ClusteredWorkStealingPool) executor;
+                case ForkJoinPool _ -> (i, poolSize) -> {
+                    ForkJoinPool pool = (ForkJoinPool) pools.get(i);
                     return poolSize - pool.getActiveThreadCount();
                 };
                 default ->
-                    throw new IllegalArgumentException(first.getClass() + " is not supported. Must be a ThreadPoolExecutor or ForkJoinPool");
+                        throw new IllegalArgumentException(first.getClass() + " is not supported. Must be a ThreadPoolExecutor or ForkJoinPool");
             };
         }
 
-        private boolean meetsWaitTimeServiceLevel(int index) {
-            Duration latencyGoal = strategy.waitThreshold();
-            if (latencyGoal.isPositive()) {
-                ExecutorService pool = pools.get(index);
-                int poolSize = poolSizeFunction.applyAsInt(pool);
-                int availableThreads = availableThreadsFunction.applyAsInt(pool, poolSize);
-                return availableThreads > 0 || lastWaitTime.get(index).get() < latencyGoal.toNanos();
-            }
-            return true;
+        private boolean belowLoadThreshold(int index) {
+            return poolLoadFunction.applyAsDouble(index) < strategy.loadThreshold;
         }
     }
 
@@ -616,25 +601,25 @@ public class ClusteredExecutors {
             }
             BitSet availableProcessors = availableProcessors();
             List<BitSet> sharedProcessors = availableProcessors
-                .stream()
-                .mapToObj(this::lastLevelCacheSharedProcessors)
-                .map(i -> {
-                    BitSet processors = new BitSet();
-                    i.forEach(processors::set);
-                    return processors;
-                }).distinct()
-                .toList();
+                    .stream()
+                    .mapToObj(this::lastLevelCacheSharedProcessors)
+                    .map(i -> {
+                        BitSet processors = new BitSet();
+                        i.forEach(processors::set);
+                        return processors;
+                    }).distinct()
+                    .toList();
             availableClusters = IntStream.range(0, sharedProcessors.size())
-                .mapToObj(i -> {
-                    BitSet processors = sharedProcessors.get(i);
-                    int firstCpuId = processors.nextSetBit(0);
-                    long cacheSize = lastLevelCacheSize(firstCpuId);
-                    return new Cluster(i, processors, cacheSize);
-                })
-                .toList();
+                    .mapToObj(i -> {
+                        BitSet processors = sharedProcessors.get(i);
+                        int firstCpuId = processors.nextSetBit(0);
+                        long cacheSize = lastLevelCacheSize(firstCpuId);
+                        return new Cluster(i, processors, cacheSize);
+                    })
+                    .toList();
             clusterByProcessor = new ArrayList<>(availableProcessors.stream().max().getAsInt());
             availableClusters.forEach(cluster ->
-                cluster.processors.stream().forEach(i -> clusterByProcessor.add(i, cluster))
+                    cluster.processors.stream().forEach(i -> clusterByProcessor.add(i, cluster))
             );
         }
 
@@ -733,11 +718,11 @@ public class ClusteredExecutors {
             Path path = Path.of("/sys/devices/system/cpu/cpu" + cpuId, "cache");
             try (Stream<Path> dirs = Files.list(path).filter(Files::isDirectory)) {
                 return dirs.map(Path::getFileName)
-                    .map(Path::toString)
-                    .filter(filename -> filename.startsWith("index"))
-                    .mapToInt(filename -> Integer.parseInt(filename.substring(5)))
-                    .max()
-                    .getAsInt();
+                        .map(Path::toString)
+                        .filter(filename -> filename.startsWith("index"))
+                        .mapToInt(filename -> Integer.parseInt(filename.substring(5)))
+                        .max()
+                        .getAsInt();
             } catch (IOException e) {
                 throw new UncheckedIOException(e);
             }
@@ -749,9 +734,9 @@ public class ClusteredExecutors {
             try {
                 String size = Files.readString(path).trim();
                 String digits = size.chars()
-                    .filter(Character::isDigit)
-                    .collect(StringBuilder::new, StringBuilder::appendCodePoint, StringBuilder::append)
-                    .toString();
+                        .filter(Character::isDigit)
+                        .collect(StringBuilder::new, StringBuilder::appendCodePoint, StringBuilder::append)
+                        .toString();
                 // TODO assume K for now
                 return Long.parseLong(digits) * 1024;
             } catch (IOException e) {
@@ -761,14 +746,14 @@ public class ClusteredExecutors {
 
         private static IntStream parseCpuList(String cpuList) {
             return Arrays.stream(cpuList.split(","))
-                .flatMapToInt(s -> {
-                    String[] split = s.split("-");
-                    int start = Integer.parseInt(split[0]);
-                    if (split.length == 2) {
-                        return IntStream.rangeClosed(start, Integer.parseInt(split[1]));
-                    }
-                    return IntStream.of(start);
-                });
+                    .flatMapToInt(s -> {
+                        String[] split = s.split("-");
+                        int start = Integer.parseInt(split[0]);
+                        if (split.length == 2) {
+                            return IntStream.rangeClosed(start, Integer.parseInt(split[1]));
+                        }
+                        return IntStream.of(start);
+                    });
         }
 
         // see https://github.com/bminor/glibc/blob/a2509a8bc955988f01f389a1cf74db3a9da42409/posix/bits/cpu-set.h#L27-L29
@@ -793,22 +778,22 @@ public class ClusteredExecutors {
 
             MemorySegment gettid_addr = stdLib.findOrThrow("gettid");
             FunctionDescriptor gettid_sig =
-                FunctionDescriptor.of(ValueLayout.JAVA_INT);
+                    FunctionDescriptor.of(ValueLayout.JAVA_INT);
             GETTID = linker.downcallHandle(gettid_addr, gettid_sig);
 
             MemorySegment getcpu_addr = stdLib.findOrThrow("sched_getcpu");
             FunctionDescriptor getcpu_sig =
-                FunctionDescriptor.of(ValueLayout.JAVA_INT);
+                    FunctionDescriptor.of(ValueLayout.JAVA_INT);
             SCHED_GETCPU = linker.downcallHandle(getcpu_addr, getcpu_sig, ccs);
 
             MemorySegment getaffinity_addr = stdLib.findOrThrow("sched_getaffinity");
             FunctionDescriptor getaffinity_sig =
-                FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.JAVA_INT, ValueLayout.JAVA_LONG, ValueLayout.ADDRESS);
+                    FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.JAVA_INT, ValueLayout.JAVA_LONG, ValueLayout.ADDRESS);
             SCHED_GETAFFINITY = linker.downcallHandle(getaffinity_addr, getaffinity_sig, ccs);
 
             MemorySegment setaffinity_addr = stdLib.findOrThrow("sched_setaffinity");
             FunctionDescriptor setaffinity_sig =
-                FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.JAVA_INT, ValueLayout.JAVA_LONG, ValueLayout.ADDRESS);
+                    FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.JAVA_INT, ValueLayout.JAVA_LONG, ValueLayout.ADDRESS);
             SCHED_SETAFFINITY = linker.downcallHandle(setaffinity_addr, setaffinity_sig, ccs);
         }
     }

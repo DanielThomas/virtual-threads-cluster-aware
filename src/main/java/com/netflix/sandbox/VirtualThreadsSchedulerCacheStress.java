@@ -18,8 +18,8 @@ public class VirtualThreadsSchedulerCacheStress {
         @Param({"WORK_STEALING", "DEFAULT"})
         public Scheduler scheduler;
 
-        @Param({"1"})
-        public int multiplier;
+        @Param({"8"})
+        public int numTasks;
 
         public ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
 
@@ -38,13 +38,16 @@ public class VirtualThreadsSchedulerCacheStress {
                 System.setProperty("jdk.virtualThreadScheduler.implClass", implClass.getCanonicalName());
             }
             List<ClusteredExecutors.Cluster> clusters = ClusteredExecutors.availableClusters();
+            if (numTasks == 0) {
+                numTasks = clusters.getFirst().availableProcessors();
+            }
             int numClusters = clusters.size();
             data = new int[numClusters][];
-            tasks = IntStream.range(0, numClusters).mapToObj(i -> {
+            tasks = IntStream.range(0, 1).mapToObj(i -> {
                 ClusteredExecutors.Cluster cluster = clusters.get(i);
                 data[i] = ThreadLocalRandom.current().ints(cluster.lastLevelCacheSize().getAsLong()).toArray();
                 return (Callable<List<Integer>>) () -> {
-                    List<Future<Integer>> futures = IntStream.range(0, clusters.getFirst().availableProcessors() * multiplier)
+                    List<Future<Integer>> futures = IntStream.range(0, numTasks)
                         .mapToObj(_ -> executor.submit(() -> Arrays.hashCode(data[i])))
                         .toList();
                     return futures.stream()

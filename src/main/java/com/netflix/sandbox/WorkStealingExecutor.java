@@ -8,8 +8,7 @@ public class WorkStealingExecutor implements Executor {
     private final ExecutorService pool;
 
     public WorkStealingExecutor() {
-        ClusteredExecutors.Strategy strategy = new ClusteredExecutors.Strategy(ClusteredExecutors.Placement.CHOOSE_TWO, Duration.ofMillis(500), Duration.ZERO);
-        pool = ClusteredExecutors.newWorkStealingPool(strategy);
+        pool = ClusteredExecutors.newWorkStealingPool();
     }
 
     @Override

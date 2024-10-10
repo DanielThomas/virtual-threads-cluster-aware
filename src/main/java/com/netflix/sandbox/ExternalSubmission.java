@@ -8,6 +8,7 @@ import org.openjdk.jmh.runner.RunnerException;
 import org.openjdk.jmh.runner.options.Options;
 import org.openjdk.jmh.runner.options.OptionsBuilder;
 
+import java.time.Duration;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -29,7 +30,7 @@ public class ExternalSubmission {
                 executor = Executors.newWorkStealingPool();
                 return;
             }
-            executor = ClusteredExecutors.newWorkStealingPool(Strategy.withPlacement(Placement.valueOf(placement)));
+            executor = ClusteredExecutors.newWorkStealingPool(new Strategy(Placement.valueOf(placement), 3.0, Duration.ZERO));
         }
     }
 
